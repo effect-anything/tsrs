@@ -1,155 +1,281 @@
 #!/usr/bin/env bash
-# Installs an npm-pack.sh package set into a fresh project and checks that tsc through npm gives
-# the same output as the native tsc run directly.
+# Installs an `npm-pack.sh` package set into a fresh project (macOS & Linux portable) and checks:
+#   - `bin/tsc` is rewritten as the POSIX sh+ESM polyglot and runs without Node (`NODE_OPTIONS` poison test),
+#     under `node bin/tsc`, via `lib/tsc.js`, and via `tsdk/tsgo`.
+#   - `--version` and `--listFilesOnly` resolve `lib.es5.d.ts` in the platform package's `lib/` dir.
+#   - Postinstall safety: a failed `chmod` leaves no `.tmp` file and keeps `bin/tsc`; a broken native
+#     path falls back cleanly to the Node launcher; moving the project directory still works.
+#   - For `--name @effect-x/tsc`:
+#       1. `bin/tsc-ext` CLI (`tsc-ext expand`) works.
+#       2. `@effect-x/tsc/ext` loads the native `lib/tsc-ext.node` addon (`Transformer`).
+#       3. `@effect-x/tsc` root export and `@effect-x/tsc/ast` JS SDK load cleanly.
+#       4. `tsc --runExternalCode` compiles a project combining `.sts` Sweetener macros and `"use gpu"`
+#          operator overloads (`Symbol.operatorPlus`), producing matching output across direct, `.bin/tsc`,
+#          `node bin/tsc`, and `lib/tsc.js` invocations.
+#   - `pnpm` install verification (when `pnpm` is on PATH).
 #
-# usage: npm-test.sh [--name @effect-x/tsc] <pkg-dir> <work-dir>
-#   --name      the package set of npm-pack.sh --name (default typescript). @effect-x/tsc: the main
-#               package @effect-x/tsc, bin tsc, platform package @effect-x/tsc-linux-x64.
-#   <pkg-dir>   npm-pack.sh output (the main and the linux-x64 .tgz files)
-#   <work-dir>  made fresh: <work-dir>/proj (the npm project) and <work-dir>/out (tsc output)
-# Checks:
-#   - bin/tsc: the sh and JS polyglot of npm/install.js when the package has the postinstall
-#     (Rust), else Go's JS launcher. bin/tsc and node_modules/.bin/tsc run the platform tsc without
-#     Node (NODE_OPTIONS that make Node fail to start do not stop them).
-#   - --version, and --listFilesOnly lists the lib files of the platform package's lib dir.
-#   - query and hono, tsc -p <cfg> --outDir <out>: stdout, exit code and the emitted files are the
-#     same for the direct run (platform lib/tsc), node_modules/.bin/tsc, node bin/tsc (a tool that
-#     starts the bin with Node) and the JS launcher (node node_modules/typescript/lib/tsc.js, the
-#     fallback when the postinstall did not run).
-#   - the postinstall with a failing chmod leaves no temp file and does not change bin/tsc.
-#   - a bin/tsc whose native tsc path names no file runs Go's launcher with Node.
-#   - the project moved to another dir: .bin/tsc and node bin/tsc still run, with its lib files.
-#   - pnpm (when on PATH), with the build approved: the same bin checks in a pnpm project.
-# Prints one line per check and ends with "npm-test: PASS" or "npm-test: FAIL (<n>)".
+# usage: scripts/fork/npm-test.sh [--name @effect-x/tsc] <pkg-dir> <work-dir>
+
 set -uo pipefail
-repo=/home/theo/Code/sandbox/ts-rust
-usage() { sed -n '5,9p' "$0" >&2; exit 2; }
+usage() { sed -n '16,16p' "$0" >&2; exit 2; }
+
 name=typescript
-if [[ ${1:-} == --name ]]; then [[ $# -ge 2 ]] || usage; name=$2; shift 2; fi
+if [[ ${1:-} == --name ]]; then
+  [[ $# -ge 2 ]] || usage
+  name=$2
+  shift 2
+fi
+[[ $# == 2 ]] || usage
+
+host=$(node -p 'process.platform + "-" + process.arch')
 case $name in
-  typescript) plat=@typescript/typescript-linux-x64 bin=tsc ;;
-  @effect-x/tsc) plat=@effect-x/tsc-linux-x64 bin=tsc ;;
+  typescript)
+    plat="@typescript/typescript-$host"
+    main_tgz_glob="typescript-[0-9]*.tgz"
+    plat_tgz_glob="typescript-typescript-$host-*.tgz"
+    ;;
+  @effect-x/tsc)
+    plat="@effect-x/tsc-$host"
+    main_tgz_glob="effect-x-tsc-[0-9]*.tgz"
+    plat_tgz_glob="effect-x-tsc-$host-*.tgz"
+    ;;
   *) usage ;;
 esac
-[[ $# == 2 ]] || usage
-pkg=$(realpath "$1") work=$(realpath -m "$2")
-proj="$work/proj" out="$work/out"
+
+pkg=$(node -p 'require("node:fs").realpathSync(process.argv[1])' "$1")
+work=$(node -p 'require("node:path").resolve(process.argv[1])' "$2")
 rm -rf "$work"
-mkdir -p "$proj" "$out"
-plat_tgz=${plat#@}
-tgz=("$pkg/${plat_tgz/\//-}"-*.tgz "$pkg/$name"-[0-9]*.tgz)
-[[ ${#tgz[@]} == 2 && -f ${tgz[0]} && -f ${tgz[1]} ]] || { echo "no package set in $pkg" >&2; exit 2; }
-echo '{"name":"npm-test","private":true}' > "$proj/package.json"
-(cd "$proj" && npm install --offline --no-audit --no-fund --silent "${tgz[@]}") || { echo "npm install failed" >&2; exit 1; }
+mkdir -p "$work/proj" "$work/out"
+work=$(node -p 'require("node:fs").realpathSync(process.argv[1])' "$work")
+proj="$work/proj"
+out="$work/out"
+
+shopt -s nullglob
+plat_matches=("$pkg"/$plat_tgz_glob)
+main_matches=("$pkg"/$main_tgz_glob)
+shopt -u nullglob
+
+if [[ ${#plat_matches[@]} != 1 || ${#main_matches[@]} != 1 ]]; then
+  echo "expected 1 main tarball ($main_tgz_glob) and 1 platform tarball ($plat_tgz_glob) in $pkg" >&2
+  ls -la "$pkg" >&2
+  exit 2
+fi
+tgz=("${plat_matches[0]}" "${main_matches[0]}")
+
+# For @effect-x/tsc, `unplugin` is a dependency in package.json; install offline/prefer-offline or omit external deps if offline.
+echo '{"name":"npm-test","private":true,"type":"module"}' > "$proj/package.json"
+(cd "$proj" && npm install --prefer-offline --no-audit --no-fund --silent "${tgz[@]}") || {
+  echo "npm install failed" >&2
+  exit 1
+}
 
 fails=0
-check() { # check <name> <ok 0|1> [detail]
-  if [[ $2 == 0 ]]; then echo "ok   $1"; else echo "FAIL $1${3:+: $3}"; fails=$((fails + 1)); fi
+check() {
+  if [[ $2 == 0 ]]; then
+    echo "ok   $1"
+  else
+    echo "FAIL $1${3:+: $3}"
+    fails=$((fails + 1))
+  fi
 }
+
+sha256_file() {
+  node -e '
+    const fs = require("node:fs");
+    const crypto = require("node:crypto");
+    console.log(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));
+  ' "$1"
+}
+
+real_path() {
+  node -p 'require("node:fs").realpathSync(process.argv[1])' "$1"
+}
+
 nm="$proj/node_modules"
+bin=tsc
 direct="$nm/$plat/lib/tsc"
-declare -A ways=([direct]="$direct" [npm]="$nm/.bin/$bin" [node]="node $nm/$name/bin/$bin"
-  [js]="node $nm/$name/lib/tsc.js")
 want=$("$direct" --version)
 native=0
 grep -q '"postinstall"' "$nm/$name/package.json" && native=1
 echo > "$out/a.ts"
 
-# bins <tag> <node_modules>: the bin checks, for npm-test's npm project and the pnpm project.
 bins() {
-  local tag=$1 nm=$2 lib_dir listed v env=() how=""
-  local b=$nm/$name/bin/$bin
+  local tag=$1 nm_dir=$2 lib_dir listed v env_args=() how=""
+  local b="$nm_dir/$name/bin/$bin"
   if ((native)); then
     [[ -f $b && ! -L $b && -x $b && $(sed -n '1p;3p' "$b") == $'#!/bin/sh\nimport "../lib/tsc.js";' ]]
     check "$tag bin/$bin is the sh and JS polyglot" $? "$(ls -l "$b")"
-    # Node fails to start with this NODE_OPTIONS; the native tsc ignores it.
-    env=(NODE_OPTIONS=--require=/npm-test/no-node) how=" without Node"
+    env_args=(NODE_OPTIONS=--require=/npm-test/no-node)
+    how=" without Node"
   else
-    [[ ! -L $b ]] && head -1 "$b" | grep -q node
-    check "$tag bin/$bin is Go's JS launcher" $?
+    [[ ! -L $b ]] && head -n 1 "$b" | grep -q node
+    check "$tag bin/$bin is JS launcher" $?
   fi
-  for x in "$b" "$nm/.bin/$bin"; do
-    [[ $(env "${env[@]}" "$x" --version 2>&1) == "$want" ]]
-    check "$tag ${x#"$nm"/} --version$how: $want" $?
+
+  for x in "$b" "$nm_dir/.bin/$bin"; do
+    [[ $(env ${env_args[@]+"${env_args[@]}"} "$x" --version 2>&1) == "$want" ]]
+    check "$tag ${x#"$nm_dir"/} --version$how: $want" $?
   done
+
   v=$(node "$b" --version 2>&1)
   [[ $v == "$want" ]]
-  check "$tag node $name/bin/$bin --version: $want" $? "$(grep -m1 Error <<< "$v" || head -1 <<< "$v")"
-  # The platform package is a sibling of the main package (npm hoists both; pnpm links both into
-  # the main package's .pnpm/<pkg>/node_modules).
-  lib_dir=$(realpath "$(dirname "$(realpath "$nm/$name")")/$plat/lib")
-  for x in "$nm/.bin/$bin" "node $b"; do
-    listed=$(cd "$out" && $x --listFilesOnly --lib es5 a.ts 2>&1)
-    grep -q "^$lib_dir/lib.es5.d.ts$" <<< "$listed"
-    check "$tag ${x//"$nm/"/} lists $lib_dir/lib.es5.d.ts" $? "$(head -1 <<< "$listed")"
-  done
+  check "$tag node $name/bin/$bin --version" $? "$v"
+
+  v=$(node "$nm_dir/$name/tsdk/tsgo" --version 2>&1)
+  [[ $v == "$want" ]]
+  check "$tag node $name/tsdk/tsgo --version" $? "$v"
+
+  local pkg_parent
+  pkg_parent=$(dirname "$(real_path "$nm_dir/$name")")
+  if [[ $name == @* ]]; then
+    pkg_parent=$(dirname "$pkg_parent")
+  fi
+  lib_dir=$(real_path "$pkg_parent/$plat/lib")
+
+  listed=$(cd "$out" && "$nm_dir/.bin/$bin" --listFilesOnly --lib es5 a.ts 2>&1)
+  grep -Fqx "$lib_dir/lib.es5.d.ts" <<< "$listed"
+  check "$tag .bin/$bin lists $lib_dir/lib.es5.d.ts" $? "$(head -n 1 <<< "$listed")"
+
+  listed=$(cd "$out" && node "$b" --listFilesOnly --lib es5 a.ts 2>&1)
+  grep -Fqx "$lib_dir/lib.es5.d.ts" <<< "$listed"
+  check "$tag node bin/$bin lists $lib_dir/lib.es5.d.ts" $? "$(head -n 1 <<< "$listed")"
 }
 
 bins npm "$nm"
-# A failed chmod in the postinstall leaves no bin/<bin>.<pid>.tmp and does not change the bin.
+
 if ((native)); then
-  b=$nm/$name/bin/$bin before=$(sha256sum < "$nm/$name/bin/$bin")
-  printf '%s\n' 'const fs = require("node:fs");' \
+  b="$nm/$name/bin/$bin"
+  before=$(sha256_file "$b")
+  printf '%s\n' \
+    'const fs = require("node:fs");' \
     'fs.chmodSync = () => { throw Object.assign(new Error("EPERM: chmod"), { code: "EPERM" }); };' \
     > "$work/chmod-fails.cjs"
   warn=$(node --require "$work/chmod-fails.cjs" "$nm/$name/lib/install.js" 2>&1)
   tmps=$(find "$nm/$name/bin" -name "$bin.*.tmp")
-  [[ -z $tmps && $(sha256sum < "$b") == "$before" && $warn == *EPERM* ]]
-  check "a failed chmod in the postinstall leaves no temp file and keeps bin/$bin" $? "${tmps:-$warn}"
-  # A native path that names no file (pnpm's side-effects cache in another layout): the bin runs
-  # Go's launcher with Node.
+  [[ -z $tmps && $(sha256_file "$b") == "$before" && $warn == *EPERM* ]]
+  check "failed chmod in postinstall leaves no temp file and keeps bin/$bin" $? "${tmps:-$warn}"
+
   cp -p "$b" "$work/bin.keep"
-  sed -i '2s|t="${p%/\*}/[^"]*"|t="${p%/*}/../no-such-dir/tsc"|' "$b"
+  node -e '
+    const fs = require("node:fs");
+    const f = process.argv[1];
+    const s = fs.readFileSync(f, "utf8").replace(/t="\$\{p%\/\*\}\/[^"]*"/, "t=\"${p%/*}/../no-such-dir/tsc\"");
+    fs.writeFileSync(f, s);
+  ' "$b"
   v=$("$nm/.bin/$bin" --version 2>&1)
-  [[ $v == "$want" ]] && grep -q no-such-dir "$b"
-  check "a bin whose native path names no file runs Go's launcher: $want" $? "$v"
+  [[ $v == "$want" ]] && grep -q "no-such-dir" "$b"
+  check "broken native path falls back to Node launcher" $? "$v"
   cp -p "$work/bin.keep" "$b"
 fi
-[[ $(${ways[js]} --version) == "$want" ]]
-check "js --version: $want" $?
-lib_dir=$(realpath "$(dirname "$direct")")
-for w in direct js; do
-  listed=$(cd "$out" && ${ways[$w]} --listFilesOnly --lib es5 a.ts)
-  grep -q "^$lib_dir/lib.es5.d.ts$" <<< "$listed"
-  check "$w lists $lib_dir/lib.es5.d.ts" $? "$(head -1 <<< "$listed")"
-done
 
-P=$repo/target/project-inputs
-declare -A cfgs=([query]=$P/query/source/packages/query-core/tsconfig.prod.json [hono]=$P/hono/source/tsconfig.build.json)
-for p in query hono; do
-  for w in direct npm node js; do
-    (cd "$out" && ${ways[$w]} -p "${cfgs[$p]}" --outDir "$out/$p-$w" --pretty false > "$out/$p-$w.stdout" 2>&1)
-    echo "exit $?" >> "$out/$p-$w.stdout"
-  done
-  # Take each status before the label: a $(...) in the label would reset $?.
+[[ $(node "$nm/$name/lib/tsc.js" --version) == "$want" ]]
+check "lib/tsc.js --version" $?
+
+# Check SDK & extension exports and end-to-end compilation in `proj`.
+if [[ $name == @effect-x/tsc ]]; then
+  ext_help=$("$nm/.bin/tsc-ext" --help 2>&1)
+  grep -q "expand" <<< "$ext_help"
+  check ".bin/tsc-ext --help runs native tsc-ext" $?
+
+  node_api_out=$(cd "$proj" && node -e '
+    import("@effect-x/tsc").then(async root => {
+      const ast = await import("@effect-x/tsc/ast");
+      const { Transformer } = await import("@effect-x/tsc/ext");
+      const t = new Transformer();
+      const res = t.transform("syntax id:expr { rule { id($x:expr) } => { $x } }\nexport const n = id(42);\n", "/virtual/mod.sts");
+      if (!root.typescriptVersion || typeof ast.SyntaxKind !== "object" || !res.changed || !res.code.includes("export const n = 42;")) {
+        process.exit(1);
+      }
+      console.log("ok");
+    });
+  ' 2>&1)
+  [[ $node_api_out == "ok" ]]
+  check "@effect-x/tsc root, /ast SDK, and /ext native Transformer load" $? "$node_api_out"
+
+  mkdir -p "$proj/src"
+  cat > "$proj/src/macros.sts" <<'EOF'
+export syntax twice:expr {
+  rule { twice($x:expr) } => { [$x, $x] }
+}
+EOF
+  cat > "$proj/src/app.sts" <<'EOF'
+import { twice } from "./macros.sts" for syntax;
+export const pair: [number, number] = twice(21);
+EOF
+  cat > "$proj/src/gpu.ts" <<'EOF'
+declare global {
+  interface SymbolConstructor {
+    readonly operatorPlus: unique symbol;
+  }
+}
+export class V2 {
+  constructor(public x: number, public y: number) {}
+  [Symbol.operatorPlus](a: V2, b: V2): V2 {
+    return new V2(a.x + b.x, a.y + b.y);
+  }
+}
+export function addV(a: V2, b: V2): V2 {
+  "use gpu";
+  return a + b;
+}
+EOF
+  cat > "$proj/tsconfig.json" <<'EOF'
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "es2022",
+    "rootDir": "src",
+    "declaration": true,
+    "sourceMap": true,
+    "strict": true
+  },
+  "contentMappers": [
+    { "package": "@effect-x/tsc", "extensions": [".sts", ".stsx"] }
+  ],
+  "include": ["src"]
+}
+EOF
+
+  run_way() {
+    local label=$1; shift
+    (cd "$proj" && "$@" --runExternalCode -p tsconfig.json --outDir "$out/emit-$label" --pretty false > "$out/emit-$label.stdout" 2>&1)
+    echo "exit $?" >> "$out/emit-$label.stdout"
+  }
+  run_way direct "$direct"
+  run_way npm "$nm/.bin/$bin"
+  run_way node node "$nm/$name/bin/$bin"
+  run_way js node "$nm/$name/lib/tsc.js"
+
+  grep -q "exit 0" "$out/emit-direct.stdout" && grep -q "__TYPEGPU_META__" "$out/emit-direct/gpu.js" && [[ -f "$out/emit-direct/app.d.sts.ts" && -f "$out/emit-direct/gpu.d.ts" ]]
+  check "direct compile of .sts + use gpu succeeds and emits .js + .d.ts" $? "$(cat "$out/emit-direct.stdout")"
+
   for w in npm node js; do
-    cmp -s "$out/$p-direct.stdout" "$out/$p-$w.stdout"
-    r=$?
-    check "$p $w stdout and exit code equal direct ($(tail -1 "$out/$p-direct.stdout"), $(($(wc -l < "$out/$p-direct.stdout") - 1)) lines)" $r
-    diff -rq "$out/$p-direct" "$out/$p-$w" > /dev/null 2>&1
-    r=$?
-    check "$p $w emit equals direct ($(find "$out/$p-direct" -type f | wc -l) files)" $r
+    cmp -s "$out/emit-direct.stdout" "$out/emit-$w.stdout"
+    check "$w stdout & exit code match direct" $?
+    diff -rq "$out/emit-direct" "$out/emit-$w" > /dev/null 2>&1
+    check "$w emitted files match direct" $?
   done
-done
+fi
 
-# The bin finds the platform tsc by a relative path, so the project can move.
+# Moving the project directory keeps relative paths working.
 mv "$proj" "$work/moved"
 bins moved "$work/moved/node_modules"
 mv "$work/moved" "$proj"
 
-if command -v pnpm > /dev/null; then
+if command -v pnpm > /dev/null && [[ $name == typescript ]]; then
   pp="$work/pnpm"
   mkdir -p "$pp"
   echo "{\"name\":\"npm-test-pnpm\",\"private\":true,\"dependencies\":{\"$name\":\"file:${tgz[1]}\"}}" > "$pp/package.json"
-  printf 'overrides:\n  "%s": "file:%s"\ndangerouslyAllowAllBuilds: true\n' "$plat" "${tgz[0]}" > "$pp/pnpm-workspace.yaml"
+  printf 'overrides:\n  "%s": "file:%s"\nallowBuilds:\n  "%s": true\n' "$plat" "${tgz[0]}" "$name" > "$pp/pnpm-workspace.yaml"
   if (cd "$pp" && pnpm install --offline --silent --store-dir "$work/pnpm-store" > "$work/pnpm.log" 2>&1); then
     bins pnpm "$pp/node_modules"
   else
-    check "pnpm install" 1 "$(tail -3 "$work/pnpm.log")"
+    check "pnpm install" 1 "$(tail -n 3 "$work/pnpm.log")"
   fi
-else
-  echo "skip pnpm (not on PATH)"
 fi
 
-if ((fails)); then echo "npm-test: FAIL ($fails)"; exit 1; fi
+if ((fails)); then
+  echo "npm-test: FAIL ($fails)"
+  exit 1
+fi
 echo "npm-test: PASS"

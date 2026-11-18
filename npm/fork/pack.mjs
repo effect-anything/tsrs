@@ -1,92 +1,72 @@
-// Writes the linux-x64 npm package set in Go's layout at the pin: `typescript` (the JS
-// launcher and the JS API) and `@typescript/typescript-linux-x64` (the native tsc and the
-// lib files). scripts/fork/npm-pack.sh runs it (the fork copy of npm/pack.mjs and
-// scripts/goport/npm-pack.sh: upstream's stay as on main); see there for the usage.
+// Assembles the fork's `@effect-x/tsc` (or local `typescript`) npm package set directly from
+// tsrs's in-tree SDK (`npm/tsrs`) and bundled library definitions (`crates/tsrs_vfs/libs`),
+// while keeping upstream `npm/build.mjs` untouched.
 //
-// It follows Herebyfile.mjs `buildNativePreviewPackages` of the Go checkout with the
-// release profile "typescript" (publishAsTypescript) for the current platform only, as
-// Go's local build does. With --native-bin it adds one thing to the main package: the
-// postinstall npm/install.js (as lib/install.js), which rewrites bin/tsc on POSIX as a sh and JS
-// polyglot: sh runs the native tsc without Node, and Node runs Go's launcher (see there).
+// Each platform package (`@effect-x/tsc-<os>-<arch>`) ships:
+//   - `lib/tsc` (`tsc.exe` on Windows): a `noembed` build of `tsrs_cli`
+//   - `lib/lib.*.d.ts`: TypeScript default libraries read next to the executable
+//   - `lib/tsc-ext` (`tsc-ext.exe` on Windows) and `lib/tsc-ext.node`: content mapper CLI + N-API addon
 //
-// PORT: not in Go. `--name @effect-x/tsc` writes the port's own package set from the same input:
-// `@effect-x/tsc` (bin `tsc`, npm/getExePath.js as lib/getExePath.js, npm/tsc-readme.md) and one
-// platform package `@effect-x/tsc-<os>-<arch>` per --exe. The default name `typescript` is Go's set.
-// The port's package has its own --package-version.
+// The main package (`@effect-x/tsc`) ships:
+//   - `bin/tsc` and `bin/tsc-ext` launchers (with optional POSIX polyglot postinstall `lib/install.js`)
+//   - `tsdk/tsgo` wrapper for VS Code SDK discovery
+//   - `dist/`: TypeScript 7 JS API (`@effect-x/tsc/sync`, `/async`, `/ast`, `/vscode`, ...)
+//   - `lib/ext/`: Sweetener + TypeGPU Node API (`@effect-x/tsc/ext`, `/unstable/mapped`, `/unplugin`)
+//   - `typescript.contentMapper` manifest (`./bin/tsc-ext`, resolved natively to platform `lib/tsc-ext`)
 //
-// PORT: @effect-x/tsc also ships tsc-ext (crates/ts_ext_syntax): --ext <os>-<arch>=<dir> names a dir
-// holding that platform's tsc-ext binary (tsc-ext, tsc-ext.exe on Windows) and its Node addon
-// (tsc-ext.node). The --ext platforms must be exactly the --exe platforms. Each platform package then
-// has lib/tsc, lib/tsc-ext and lib/tsc-ext.node; the main package has the bins `tsc` and `tsc-ext`
-// (bin/tsc-ext is a Node launcher that runs the platform's lib/tsc-ext), the tsconfig
-// `contentMappers` manifest (exec ./bin/tsc-ext; tsc starts the platform package's lib/tsc-ext
-// in its place when it is installed, by convention), and the Node API
-// (crates/ts_ext_syntax/js as lib/ext, the subpath export "./ext"; the root export stays
-// TypeScript's). The tsc keeps reporting the TypeScript version
-// (--version): the compiler matches `typesVersions` against it, so a tsc that reported 0.1.0 would
-// pick the typings that packages keep for TypeScript 5.6 and older. The main package records it as
-// `tscVersion`, for the postinstall check.
-//
-// usage: node npm/pack.mjs --layout <typescript|typescript-go> --go-dir <dir> --exe <tsc>...
-//          --libs <dir> --dist <dir> --version <v> --git-head <sha> --out <dir> [--native-bin]
-//          [--name <typescript|@effect-x/tsc>] [--package-version <v>]
-//
-// --version is the version the tsc reports. --package-version is the npm version (default
-// --version).
-//
-// --exe is <os>-<arch>=<tsc> (Node's process.platform and process.arch, for example
-// darwin-arm64=<path>), or a plain <tsc> for linux-x64. Repeat it for more platforms. It is not
-// run here, so a cross-built tsc works.
-//
-// --layout is the pin layout (scripts/upstream/pin.py). "typescript" (microsoft/TypeScript, pin N
-// on): --go-dir is <repo>/tsc, the input is <repo>/packages/typescript (it already has bin/tsc and
-// lib/tsc.js), and LICENSE.txt and NOTICE.txt are at <repo>. "typescript-go": the input is
-// <go-dir>/_packages/native-preview (bin/tsgo, lib/tsgo.js), with LICENSE and NOTICE.txt at <go-dir>.
+// usage: node npm/fork/pack.mjs --exe <os>-<arch>=<tsc>... [--ext <os>-<arch>=<dir>...]
+//          [--libs <dir>] [--dist <dir>] [--version <ts-version>] [--git-head <sha>]
+//          --out <dir> [--native-bin] [--name <@effect-x/tsc|typescript>] [--package-version <v>]
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { readVersions } from "../../tools/release/version.mjs";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, "..", "..");
+const npmDir = path.join(repoRoot, "npm");
+const tsrsTemplateDir = path.join(npmDir, "tsrs");
+const versions = readVersions(repoRoot);
 
 const { values: args } = parseArgs({
     options: {
-        layout: { type: "string" },
-        "go-dir": { type: "string" },
         exe: { type: "string", multiple: true },
         ext: { type: "string", multiple: true },
-        name: { type: "string", default: "typescript" },
+        name: { type: "string", default: "@effect-x/tsc" },
         "package-version": { type: "string" },
-        libs: { type: "string" },
-        dist: { type: "string" },
-        version: { type: "string" },
+        libs: { type: "string", default: path.join(repoRoot, "crates", "tsrs_vfs", "libs") },
+        dist: { type: "string", default: path.join(tsrsTemplateDir, "dist") },
+        version: { type: "string", default: versions.typescriptVersion },
         "git-head": { type: "string" },
         out: { type: "string" },
         "native-bin": { type: "boolean", default: false },
     },
     strict: true,
 });
-for (const name of ["layout", "go-dir", "exe", "libs", "dist", "version", "git-head", "out"]) {
-    if (!args[name]) throw new Error(`missing --${name}`);
+
+for (const req of ["exe", "git-head", "out"]) {
+    if (!args[req]) throw new Error(`missing --${req}`);
 }
-const { layout, "go-dir": goDir, libs, dist, version, "git-head": gitHead, out, name } = args;
-if (layout !== "typescript" && layout !== "typescript-go") throw new Error(`unknown --layout ${layout}`);
-if (name !== "typescript" && name !== "@effect-x/tsc") throw new Error(`unknown --name ${name}`);
+
+const { libs, dist, version, "git-head": gitHead, out, name } = args;
+if (name !== "typescript" && name !== "@effect-x/tsc") {
+    throw new Error(`unknown --name ${name} (expected @effect-x/tsc or typescript)`);
+}
+if (!fs.existsSync(dist)) {
+    throw new Error(`SDK dist directory does not exist (${dist}); build it first with \`node npm/build.mjs --sdk-only\``);
+}
+
 const asTypescript = name === "typescript";
 const binName = "tsc";
 const scope = asTypescript ? "" : name.slice(0, name.indexOf("/"));
 const unscoped = asTypescript ? name : name.slice(name.indexOf("/") + 1);
-const readmeStem = asTypescript ? "" : unscoped;
-const packageVersion = args["package-version"] ?? version;
-const atN = layout === "typescript";
-const root = atN ? path.dirname(goDir) : goDir;
-const inputDir = atN ? path.join(root, "packages", "typescript") : path.join(goDir, "_packages", "native-preview");
-const tsLicenseFile = path.join(root, atN ? "LICENSE.txt" : "LICENSE");
-const tsNoticeFile = path.join(root, "NOTICE.txt");
+const packageVersion = args["package-version"] ?? versions.version;
 
-// Go: Herebyfile.mjs getPlatforms. PORT: the platforms are the --exe values, not only the current
-// platform as in Go's local build.
 const platforms = args.exe.map(value => {
     const match = value.match(/^([a-z0-9]+)-([a-z0-9]+)=(.+)$/);
-    const [nodeOs, nodeArch, exe] = match ? match.slice(1) : ["linux", "x64", value];
+    const [nodeOs, nodeArch, exe] = match ? match.slice(1) : [process.platform, process.arch, value];
     return {
         nodeOs,
         nodeArch,
@@ -97,50 +77,71 @@ const platforms = args.exe.map(value => {
     };
 });
 
-// PORT: tsc-ext per platform (@effect-x/tsc only), the same platform set as tsc.
 const extDirs = new Map((args.ext ?? []).map(value => {
     const match = value.match(/^([a-z0-9]+-[a-z0-9]+)=(.+)$/);
     if (!match) throw new Error(`--ext wants <os>-<arch>=<dir>, not ${value}`);
     return [match[1], match[2]];
 }));
+
 if (asTypescript && extDirs.size > 0) throw new Error("--ext is for --name @effect-x/tsc only");
 if (!asTypescript) {
     const tscSet = platforms.map(p => `${p.nodeOs}-${p.nodeArch}`).sort().join(" ");
     const extSet = [...extDirs.keys()].sort().join(" ");
     if (tscSet !== extSet) {
-        throw new Error(`the tsc-ext platforms (--ext: ${extSet || "none"}) must be the tsc platforms (--exe: ${tscSet})`);
+        throw new Error(`the tsc-ext platforms (--ext: ${extSet || "none"}) must match the tsc platforms (--exe: ${tscSet})`);
     }
 }
+
 const extExeName = nodeOs => (nodeOs === "win32" ? "tsc-ext.exe" : "tsc-ext");
 
-// Go: Herebyfile.mjs getPublishTag (publishAsTypescript). Go's nativePreviewReleaseVersion is
-// undefined at both layouts, so a version with no dev, beta or rc part is refused.
-// PORT: @effect-x/tsc has no such rule; `npm publish --tag` picks its tag.
 function publishTag() {
-    const match = version.match(/-(dev|beta|rc)(?:[.-]|$)/);
+    const match = packageVersion.match(/-(dev|alpha|beta|rc)(?:[.-]|$)/);
     if (match?.[1]) return match[1] === "dev" ? "next" : match[1];
-    throw new Error(`Refusing to publish 'typescript' with the latest tag from non-release version ${version}.`);
+    throw new Error(`Refusing to publish 'typescript' with the latest tag from non-release version ${packageVersion}.`);
 }
 
-// Go: Herebyfile.mjs stripSourceConditions and stripConditionsFromValue
 function stripConditions(value) {
+    if (Array.isArray(value)) return value.map(stripConditions);
     if (value == null || typeof value !== "object") return value;
-    delete value["@typescript/source"];
-    for (const key of Object.keys(value)) value[key] = stripConditions(value[key]);
-    const keys = Object.keys(value);
-    return keys.length === 1 && keys[0] === "default" ? value.default : value;
+    const copy = {};
+    for (const [key, v] of Object.entries(value)) {
+        if (key === "@typescript/source") continue;
+        copy[key] = stripConditions(v);
+    }
+    const keys = Object.keys(copy);
+    return keys.length === 1 && keys[0] === "default" ? copy.default : copy;
 }
 
-const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, undefined, 4));
+const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, undefined, 4) + "\n");
 
-// Go: Herebyfile.mjs buildNativePreviewPackages, inputPackageJson with publishAsTypescript.
-const input = JSON.parse(fs.readFileSync(path.join(inputDir, "package.json"), "utf8"));
-input.version = packageVersion;
+const licenseBytes = fs.readFileSync(path.join(repoRoot, "LICENSE"));
+const noticeBytes = fs.readFileSync(path.join(repoRoot, "NOTICE"));
+function writeLicense(dir) {
+    fs.writeFileSync(path.join(dir, "LICENSE"), licenseBytes);
+    fs.writeFileSync(path.join(dir, "NOTICE.txt"), noticeBytes);
+}
+
+const template = JSON.parse(fs.readFileSync(path.join(tsrsTemplateDir, "package.json"), "utf8"));
+const input = {
+    ...template,
+    version: packageVersion,
+    files: [...new Set([...(template.files ?? []), "NOTICE.txt"])],
+    bin: asTypescript
+        ? { [binName]: `./bin/${binName}` }
+        : { [binName]: `./bin/${binName}`, "tsc-ext": "./bin/tsc-ext" },
+    exports: stripConditions(template.exports),
+    imports: stripConditions(template.imports),
+    gitHead,
+    tsrs: {
+        typescriptVersion: versions.typescriptVersion,
+        typescriptCommit: versions.typescriptCommit,
+    },
+    publishConfig: asTypescript ? { access: "public", tag: publishTag() } : { access: "public" },
+};
 delete input.private;
-input.files = [...new Set([...(input.files ?? []), "NOTICE.txt"])];
-input.bin = asTypescript
-    ? { [binName]: `./bin/${binName}` }
-    : { [binName]: `./bin/${binName}`, "tsc-ext": "./bin/tsc-ext" };
+delete input.scripts;
+delete input.devDependencies;
+
 if (asTypescript) {
     input.description = "TypeScript is a language for application scale JavaScript development";
     input.homepage = "https://www.typescriptlang.org/";
@@ -149,94 +150,70 @@ if (asTypescript) {
     input.repository = { type: "git", url: "https://github.com/microsoft/TypeScript.git" };
 }
 else {
-    // PORT: the port's own package. The port is MIT. The JS launcher, the JS API and the lib files
-    // are TypeScript's, unchanged (Apache-2.0). See portNotice below.
-    input.license = "MIT AND Apache-2.0";
-    // The publisher of @effect-x/tsc; the port's copyright stays in LICENSE and NOTICE.
+    input.license = "Apache-2.0";
     input.author = "effect-anything";
-    input.description = "A Rust port of the TypeScript 7 compiler";
-    input.keywords = ["typescript", "tsc", "compiler", "rust"];
-    // npm trusted publishing (the release workflow) needs repository.url to name the repo that
-    // publishes. The platform packages copy it.
-    input.homepage = "https://github.com/effect-anything/tsc";
-    input.bugs = { url: "https://github.com/effect-anything/tsc/issues" };
-    input.repository = { type: "git", url: "git+https://github.com/effect-anything/tsc.git" };
+    input.description = "A Rust port of the TypeScript 7 compiler with Sweetener and TypeGPU extensions";
+    input.keywords = ["typescript", "tsc", "compiler", "rust", "sweetener", "typegpu"];
+    input.homepage = "https://github.com/effect-anything/tsrs";
+    input.bugs = { url: "https://github.com/effect-anything/tsrs/issues" };
+    input.repository = { type: "git", url: "git+https://github.com/effect-anything/tsrs.git" };
 }
-delete input.scripts;
-delete input.devDependencies;
-for (const field of ["exports", "imports"]) input[field] = stripConditions(input[field]);
-input.gitHead = gitHead;
-input.publishConfig = asTypescript ? { access: "public", tag: publishTag() } : { access: "public" };
 
 fs.rmSync(out, { recursive: true, force: true });
 
-// The main package (`typescript`, or `@effect-x/tsc`). The dir name has no scope.
+// Assemble the main package (`@effect-x/tsc` or `typescript`).
 const mainDir = path.join(out, unscoped);
-const here = path.dirname(fileURLToPath(import.meta.url));
-// npm/fork/: the repo root is two levels up; install.js is upstream's npm/install.js.
-const repoRoot = path.dirname(path.dirname(here));
-const npmDir = path.join(repoRoot, "npm");
+fs.mkdirSync(mainDir, { recursive: true });
 
-// PORT: @effect-x/tsc ships the port's MIT LICENSE, and a NOTICE.txt with the licenses and notices of
-// the code it ports or copies (the repo's NOTICE.md and licenses/). Go's set keeps TypeScript's.
-function portNotice() {
-    const part = (title, file) => [`${"=".repeat(78)}\n${title}\n${"=".repeat(78)}\n`, fs.readFileSync(file, "utf8")];
-    return [
-        fs.readFileSync(path.join(repoRoot, "NOTICE.md"), "utf8"),
-        ...part("TypeScript license", tsLicenseFile),
-        ...part("TypeScript third-party notices", tsNoticeFile),
-        ...part("Go license", path.join(repoRoot, "licenses", "Go-LICENSE.txt")),
-        ...part("Unicode license", path.join(repoRoot, "licenses", "Unicode-LICENSE.txt")),
-    ].join("\n");
-}
-function writeLicense(dir) {
-    if (asTypescript) {
-        fs.copyFileSync(tsLicenseFile, path.join(dir, "LICENSE"));
-        fs.copyFileSync(tsNoticeFile, path.join(dir, "NOTICE.txt"));
-    }
-    else {
-        fs.copyFileSync(path.join(repoRoot, "LICENSE"), path.join(dir, "LICENSE"));
-        fs.writeFileSync(path.join(dir, "NOTICE.txt"), portNotice());
+for (const entry of ["schemas", "vendor", "UPSTREAM.json"]) {
+    const from = path.join(tsrsTemplateDir, entry);
+    if (fs.existsSync(from)) {
+        fs.cpSync(from, path.join(mainDir, entry), { recursive: true });
     }
 }
+fs.cpSync(dist, path.join(mainDir, "dist"), { recursive: true });
+
+// `lib/`: JS launcher, version shim, `#getExePath`, optional postinstall, and `/ext` wrappers.
+const mainLibDir = path.join(mainDir, "lib");
+fs.mkdirSync(mainLibDir, { recursive: true });
+const launcherSrc = fs.readFileSync(path.join(tsrsTemplateDir, "lib", "tsrs.js"), "utf8")
+    .replaceAll("tsrs:", "tsc:");
+fs.writeFileSync(path.join(mainLibDir, "tsc.js"), launcherSrc);
+fs.copyFileSync(path.join(here, "getExePath.js"), path.join(mainLibDir, "getExePath.js"));
+fs.writeFileSync(path.join(mainLibDir, "getExePath.d.ts"), "export default function getExePath(exeName?: string): string;\n");
+fs.copyFileSync(path.join(tsrsTemplateDir, "lib", "version.cjs"), path.join(mainLibDir, "version.cjs"));
+fs.copyFileSync(path.join(tsrsTemplateDir, "lib", "version.d.cts"), path.join(mainLibDir, "version.d.cts"));
+
+// `tsdk/`: VS Code native SDK shim (`tsdk/tsgo`).
+const mainTsdkDir = path.join(mainDir, "tsdk");
+fs.mkdirSync(mainTsdkDir, { recursive: true });
+writeJson(path.join(mainTsdkDir, "package.json"), { type: "commonjs" });
+fs.writeFileSync(
+    path.join(mainTsdkDir, "tsgo"),
+    '#!/usr/bin/env node\n"use strict";\nimport("../lib/tsc.js").catch(e => {\n    console.error(`tsc: ${e && e.stack || e}`);\n    process.exit(1);\n});\n',
+);
+fs.chmodSync(path.join(mainTsdkDir, "tsgo"), 0o755);
+
+// `bin/`: ESM launchers (no `bin/package.json` so postinstall can rewrite `bin/tsc` as sh+ESM polyglot).
+const mainBinDir = path.join(mainDir, "bin");
+fs.mkdirSync(mainBinDir, { recursive: true });
+fs.writeFileSync(path.join(mainBinDir, binName), '#!/usr/bin/env node\nimport "../lib/tsc.js";\n');
+fs.chmodSync(path.join(mainBinDir, binName), 0o755);
+
 const mainPackage = {
     ...input,
     name,
     ...(asTypescript ? {} : { tscVersion: version }),
     optionalDependencies: Object.fromEntries(platforms.map(p => [p.packageName, packageVersion])),
 };
-if (atN) {
-    // Go copies the whole input but node_modules and dist; its filter sees the path from the repo.
-    fs.cpSync(inputDir, mainDir, {
-        recursive: true,
-        filter: src => {
-            const p = path.posix.join("packages/typescript", path.relative(inputDir, src).split(path.sep).join("/"));
-            return !p.endsWith("/node_modules") && !p.includes("/dist");
-        },
-    });
-}
-else {
-    for (const entry of ["bin", "lib", "vendor"]) {
-        fs.cpSync(path.join(inputDir, entry), path.join(mainDir, entry), { recursive: true });
-    }
-    fs.rmSync(path.join(mainDir, "bin", "tsgo"));
-    fs.renameSync(path.join(mainDir, "lib", "tsgo.js"), path.join(mainDir, "lib", "tsc.js"));
-}
-fs.cpSync(dist, path.join(mainDir, "dist"), { recursive: true });
-fs.rmSync(path.join(mainDir, "bin"), { recursive: true, force: true });
-fs.mkdirSync(path.join(mainDir, "bin"));
-fs.writeFileSync(path.join(mainDir, "bin", binName), '#!/usr/bin/env node\nimport "../lib/tsc.js";\n');
-fs.chmodSync(path.join(mainDir, "bin", binName), 0o755);
+
 if (asTypescript) {
-    fs.copyFileSync(path.join(inputDir, "typescript-package-readme.md"), path.join(mainDir, "README.md"));
+    fs.copyFileSync(path.join(repoRoot, "README.md"), path.join(mainDir, "README.md"));
 }
 else {
-    fs.copyFileSync(path.join(here, `${readmeStem}-readme.md`), path.join(mainDir, "README.md"));
-    fs.copyFileSync(path.join(here, "getExePath.js"), path.join(mainDir, "lib", "getExePath.js"));
-    // PORT: tsc-ext. The launcher runs lib/tsc-ext of the platform package with this process's
-    // stdio, so it also serves as the content mapper tsc starts (typescript.contentMapper.exec).
+    fs.copyFileSync(path.join(here, "tsc-readme.md"), path.join(mainDir, "README.md"));
     fs.writeFileSync(
-        path.join(mainDir, "bin", "tsc-ext"),
+        path.join(mainBinDir, "tsc-ext"),
         [
             "#!/usr/bin/env node",
             'import { spawnSync } from "node:child_process";',
@@ -252,68 +229,90 @@ else {
             "",
         ].join("\n"),
     );
-    fs.chmodSync(path.join(mainDir, "bin", "tsc-ext"), 0o755);
+    fs.chmodSync(path.join(mainBinDir, "tsc-ext"), 0o755);
+
     const extJs = path.join(repoRoot, "crates", "ts_ext_syntax", "js");
-    fs.cpSync(extJs, path.join(mainDir, "lib", "ext"), {
+    fs.cpSync(extJs, path.join(mainLibDir, "ext"), {
         recursive: true,
-        filter: source => path.basename(source) !== "test",
+        filter: source => {
+            const base = path.basename(source);
+            return base !== "test" && !base.endsWith(".node");
+        },
     });
-    // tsc starts the platform package's native lib/tsc-ext directly: for a one-entry exec
-    // ./bin/<name>, the port's tsc looks for <package>-<platform>-<arch>/lib/<name> next to the
-    // mapper package (crates/ts_goport/src/frontend/tsoptions/content_mappers.rs `native_exec`).
-    // exec, the Node launcher, is the fallback when that package is not installed, and the
-    // command for hosts without that convention.
+
     mainPackage.typescript = {
         contentMapper: {
             exec: ["./bin/tsc-ext"],
         },
     };
-    // The root export stays TypeScript's (the version); the Node API is "@effect-x/tsc/ext".
     mainPackage.exports = {
         ...mainPackage.exports,
         "./ext": { types: "./lib/ext/index.d.ts", default: "./lib/ext/index.cjs" },
-        // Typed wrappers for the content-mapper API methods (tsc --api).
         "./unstable/mapped": { types: "./lib/ext/api.d.mts", default: "./lib/ext/api.mjs" },
-        // The bundler plugin: "@effect-x/tsc/unplugin" and "@effect-x/tsc/unplugin/<bundler>".
         "./unplugin": { types: "./lib/ext/unplugin.d.mts", default: "./lib/ext/unplugin.mjs" },
         "./unplugin/*": { types: "./lib/ext/unplugin/*.d.mts", default: "./lib/ext/unplugin/*.mjs" },
     };
     mainPackage.dependencies = { ...mainPackage.dependencies, unplugin: "^3.3.0" };
 }
+
 if (args["native-bin"]) {
-    // PORT: not in Go. The native bin on POSIX (npm/install.js).
     mainPackage.scripts = { postinstall: "node lib/install.js" };
-    fs.copyFileSync(path.join(npmDir, "install.js"), path.join(mainDir, "lib", "install.js"));
+    fs.copyFileSync(path.join(here, "install.js"), path.join(mainLibDir, "install.js"));
 }
+
 writeJson(path.join(mainDir, "package.json"), mainPackage);
 writeLicense(mainDir);
 
-// The platform packages: the lib files and the native tsc in lib/.
+// Assemble per-platform packages (`@effect-x/tsc-<os>-<arch>` or `@typescript/typescript-<os>-<arch>`).
+const libNames = fs.readdirSync(libs).filter(f => f.endsWith(".d.ts")).sort();
+if (!libNames.includes("lib.d.ts")) {
+    throw new Error(`libs directory (${libs}) is missing lib.d.ts`);
+}
+
 for (const { nodeOs, nodeArch, exe, packageName } of platforms) {
     const platformDir = path.join(out, `${unscoped}-${nodeOs}-${nodeArch}`);
-    const platformPackage = {
-        ...input,
-        bin: undefined,
-        files: ["lib", "NOTICE.txt"],
-        imports: undefined,
-        dependencies: undefined,
-        name: packageName,
-        os: [nodeOs],
-        cpu: [nodeArch],
-        exports: { "./package.json": "./package.json" },
-    };
-    fs.cpSync(libs, path.join(platformDir, "lib"), { recursive: true });
-    // getExePath.js looks for lib/tsc.exe on Windows.
+    const platformLibDir = path.join(platformDir, "lib");
+    fs.mkdirSync(platformLibDir, { recursive: true });
+
+    for (const libName of libNames) {
+        fs.copyFileSync(path.join(libs, libName), path.join(platformLibDir, libName));
+    }
+
     const exeName = nodeOs === "win32" ? "tsc.exe" : "tsc";
-    fs.copyFileSync(exe, path.join(platformDir, "lib", exeName));
-    fs.chmodSync(path.join(platformDir, "lib", exeName), 0o755);
+    fs.copyFileSync(exe, path.join(platformLibDir, exeName));
+    fs.chmodSync(path.join(platformLibDir, exeName), 0o755);
+
     const extDir = extDirs.get(`${nodeOs}-${nodeArch}`);
     if (extDir) {
         for (const file of [extExeName(nodeOs), "tsc-ext.node"]) {
-            fs.copyFileSync(path.join(extDir, file), path.join(platformDir, "lib", file));
+            const srcFile = path.join(extDir, file);
+            if (!fs.existsSync(srcFile)) {
+                throw new Error(`missing ${file} in --ext directory ${extDir}`);
+            }
+            fs.copyFileSync(srcFile, path.join(platformLibDir, file));
         }
-        fs.chmodSync(path.join(platformDir, "lib", extExeName(nodeOs)), 0o755);
+        fs.chmodSync(path.join(platformLibDir, extExeName(nodeOs)), 0o755);
     }
+
+    const platformPackage = {
+        name: packageName,
+        version: packageVersion,
+        license: input.license,
+        author: input.author,
+        description: `The ${nodeOs}-${nodeArch} native binaries for ${name}`,
+        repository: input.repository,
+        bugs: input.bugs,
+        homepage: input.homepage,
+        engines: input.engines,
+        preferUnplugged: true,
+        files: ["lib", "NOTICE.txt"],
+        exports: { "./package.json": "./package.json" },
+        os: [nodeOs],
+        cpu: [nodeArch],
+        gitHead,
+        publishConfig: input.publishConfig,
+        tsrs: input.tsrs,
+    };
     writeJson(path.join(platformDir, "package.json"), platformPackage);
     writeLicense(platformDir);
     fs.writeFileSync(
@@ -321,7 +320,8 @@ for (const { nodeOs, nodeArch, exe, packageName } of platforms) {
         [
             `# \`${packageName}\``,
             "",
-            `This package provides ${nodeOs}-${nodeArch} support for [${name}](https://www.npmjs.com/package/${name}).`,
-        ].join("\n") + "\n",
+            `This package provides ${nodeOs}-${nodeArch} native binaries (\`tsc\`, \`tsc-ext\`, and \`tsc-ext.node\`) for [${name}](https://www.npmjs.com/package/${name}).`,
+            "",
+        ].join("\n"),
     );
 }

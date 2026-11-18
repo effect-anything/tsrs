@@ -1,136 +1,46 @@
-# npm packages
+# Fork npm packages (`@effect-x/tsc`)
 
-Local npm packages for the port, in the layout of the Go packages at the pin, and the port's own
-published set `@effect-x/tsc` (see "@effect-x/tsc releases" below).
+Assembles `@effect-x/tsc` (and local drop-in `typescript` test packages) from `tsrs`'s in-tree
+TypeScript 7 SDK (`npm/tsrs`) and bundled library definitions (`crates/tsrs_vfs/libs`), while
+keeping upstream `npm/build.mjs` (`tsrs` + `@tsrs/*`) untouched.
 
-- `typescript`: Go's JS launcher (`bin/tsc`, `lib/tsc.js`, `lib/getExePath.js`) and JS API (`dist`).
-- `@typescript/typescript-linux-x64`: `lib/tsc` (a noembed build) and the lib files next to it.
-- `wasm` (`@effect-x/tsc-wasm` in this tree; the package name is still `ts-rust-wasm`): the WebAssembly build for Node, Deno, Bun and browsers. See
-  [wasm/README.md](wasm/README.md).
+## Package layout
 
-The port adds one file to Go's layout: `install.js`, the postinstall (`lib/install.js`). On POSIX it
-rewrites `bin/tsc` as a sh and JS polyglot. sh runs it as an exec of the platform package's
-`lib/tsc` by a relative path, so `tsc` runs without Node, which saves about 20 ms on every run.
-Node (`node node_modules/typescript/bin/tsc`) runs it as Go's JS launcher. The exec keeps the real
-path of the binary in the platform package, where it reads the lib files. When the rewrite cannot
-happen, `bin/tsc` stays Go's JS launcher, which still works.
+- **`@effect-x/tsc`**:
+  - `bin/tsc` and `bin/tsc-ext` launchers (rewritten on POSIX by postinstall `lib/install.js` as a
+    `sh` + ESM polyglot so `tsc` executes the native binary directly without Node startup cost).
+  - `tsdk/tsgo` wrapper for VS Code native SDK discovery (`js/ts.tsdk.path`).
+  - `dist/`: TypeScript 7 JavaScript API (`@effect-x/tsc/sync`, `/async`, `/ast`, `/vscode`, ...).
+  - `lib/ext/`: Sweetener + TypeGPU Node API (`@effect-x/tsc/ext`, `/unstable/mapped`, `/unplugin`).
+  - `typescript.contentMapper` manifest (`exec: ["./bin/tsc-ext"]`), automatically resolved by `tsc`
+    to the native `lib/tsc-ext` binary inside `@effect-x/tsc-<platform>-<arch>`.
+- **`@effect-x/tsc-<platform>-<arch>`**:
+  - `lib/tsc` (`lib/tsc.exe` on Windows): `noembed` build of `tsrs_cli`.
+  - `lib/lib.*.d.ts`: TypeScript default library definitions read adjacent to `lib/tsc`.
+  - `lib/tsc-ext` (`lib/tsc-ext.exe` on Windows): Sweetener + TypeGPU content-mapper CLI.
+  - `lib/tsc-ext.node`: N-API native addon for `@effect-x/tsc/ext` and `/unplugin`.
 
-The relative path is fixed at install. pnpm keeps a postinstall's result in its store (the
-side-effects cache) and gives it to a later install of the same package in another layout
-(hoisted, isolated or the global virtual store), where the path can name no file. Then `bin/tsc`
-runs Go's JS launcher with Node, as Go's package does, about 20 ms slower per run.
-
-Files:
-
-- `pack.mjs` writes the package dirs. It follows the Go checkout's `Herebyfile.mjs`
-  (`buildNativePreviewPackages`, release profile `typescript`).
-- `install.js` is the postinstall.
-- `getExePath.js` and `tsc-readme.md` replace Go's launcher lookup and README in `@effect-x/tsc`.
-
-Build, test and time (see the header of each script):
+## Local build, pack, and test
 
 ```sh
-GOPORT_BUILD_VERSION=7.1.0-dev.goport.1 scripts/run-cargo-capped.sh build --release -p ts_goport --bin tsgo --features noembed
-GOPORT_PIN=<pin> scripts/goport/npm-pack.sh <out>/rs target/release/tsgo
-GOPORT_PIN=<pin> scripts/goport/npm-pack.sh --go 7.1.0-dev.goport.1 <out>/go
-scripts/goport/npm-test.sh <out>/rs <out>/test-rs
-scripts/goport/perf-npm.sh <label> <out>/test-rs/proj <out>/test-go/proj   # on a quiet host
+# 1. Build a `noembed` tsrs binary + tsc-ext CLI & N-API cdylib
+cargo build --release -p tsrs_cli --bin tsrs --features noembed
+cargo build --release -p ts_ext_syntax --bin tsc-ext --lib
+
+# 2. Stage host tsc-ext artifacts (<host> = darwin-arm64, linux-x64, etc.)
+host=$(node -p 'process.platform + "-" + process.arch')
+mkdir -p target/ext-$host
+cp target/release/tsc-ext target/ext-$host/tsc-ext
+# macOS: libts_ext_syntax.dylib | Linux: libts_ext_syntax.so | Windows: ts_ext_syntax.dll
+cp target/release/libts_ext_syntax.dylib target/ext-$host/tsc-ext.node
+
+# 3. Pack @effect-x/tsc + @effect-x/tsc-<host>
+scripts/fork/npm-pack.sh --name @effect-x/tsc --package-version 0.1.0-local.1 \
+  --ext "$host=target/ext-$host" target/npm-pkg target/release/tsrs
+
+# 4. Run end-to-end tarball install & compilation verification
+scripts/fork/npm-test.sh --name @effect-x/tsc target/npm-pkg target/npm-test
 ```
 
-A shipped build uses `RELEASE_VERSION=<v> crates/ts_goport/scripts/build-release.sh` (noembed,
-PGO and BOLT) in place of the cargo line.
-
-## Linux libc
-
-The platform package has no `libc` field, as Go's has none, so npm installs it on glibc and musl
-systems alike. Go's tsc is static and starts on both. The published `tsc-rs` packages are static
-too: the release workflow builds the Linux tsc as static musl, non-PIE, so it starts on any x64 or
-arm64 Linux, Alpine included.
-
-build-release.sh is different. Its default is a dynamic glibc build, which needs glibc 2.28 or
-later: on Alpine, or on a distro with an older glibc, it does not start, and the JS launcher fails
-too. `RELEASE_LIBC=musl RELEASE_PIE=0` in front of the build-release.sh line builds the static tsc
-that the release ships. It is 0.5 to 1.9% slower (see the build-release.sh header), which is why
-build-release.sh does not default to it.
-
-## @effect-x/tsc releases
-
-`@effect-x/tsc` is the same set under the port's own names: the main package `@effect-x/tsc` (bin `tsc`, so it
-does not clash with the `typescript` package name) and one platform package per platform,
-`@effect-x/tsc-linux-x64`, `@effect-x/tsc-linux-arm64`, `@effect-x/tsc-darwin-arm64`, `@effect-x/tsc-darwin-x64`,
-`@effect-x/tsc-win32-x64` and `@effect-x/tsc-win32-arm64` (the Windows tsc is `lib/tsc.exe`). Its
-`lib/getExePath.js` finds `@effect-x/tsc-<platform>-<arch>`.
-
-The npm version (`--package-version`) is the port's own. The tsc is not stamped with it: it reports
-the TypeScript version of the source (`7.1.0-dev`), because the compiler matches `typesVersions`
-against that version. A tsc that reported 0.1.0 picked the `<=5.6` typings of zod's dependencies
-and lost 2 of Go's 21 zod errors. The main package records the tsc version as `tscVersion` for the
-postinstall check.
-
-The release workflow (`.github/workflows/release.yml`) makes a release:
-
-1. Push a tag `v<version>`, for example `git tag v0.1.0 && git push origin v0.1.0`. The npm
-   version is the tag without the `v`.
-2. It builds the tsc on Linux x64 and Linux arm64 (static musl, non-PIE: it starts on any Linux of
-   its arch; each builds natively on a Blacksmith runner of that arch), on an arm64 Mac and an
-   Intel Mac (jemalloc does not cross-build for macOS with zig), and on Windows x64 and arm64
-   (MSVC, the C runtime linked in, the system allocator), from the same source. Each is a PGO
-   build trained on its own platform (see below). Blacksmith has no Intel Mac and no arm64
-   Windows runner: darwin-x64 builds on GitHub's `macos-15-intel` and win32-arm64 on GitHub's
-   `windows-11-arm`.
-3. It packs the set with `npm-pack.sh --name @effect-x/tsc --package-version <v> --also linux-arm64=<tsc> --also darwin-arm64=<tsc> --also darwin-x64=<tsc> --also win32-x64=<tsc.exe> --also win32-arm64=<tsc.exe>`,
-   makes one archive per platform (the tsc, the lib files, LICENSE and NOTICE.txt; a .tar.gz, and
-   a .zip for Windows) and installs the packages in a fresh project on each platform
-   (GitHub-hosted `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `macos-15-intel`,
-   `windows-latest` and `windows-11-arm`).
-4. It publishes the platform packages, then `@effect-x/tsc`, and creates a GitHub release with the
-   archives, the .tgz files and `SHA256SUMS`. A stable version goes to the dist-tag `latest` and a
-   normal release. A version with a prerelease part (`0.2.0-beta.1`) goes to `next` and a GitHub
-   prerelease. The publish uses npm
-   trusted publishing (see below), so there is no npm token in the repo.
-
-Pull requests that change the release files run steps 2 and 3 with the version `0.0.0-ci.<run>`.
-To make a prerelease the default after a check of `npx --package=@effect-x/tsc@next tsc` on each platform, run
-`npm dist-tag add @effect-x/tsc@<v> latest`, and the same for each platform package.
-
-The CI builds are PGO builds of the shipped profile (fat LTO): `build-pgo.sh` trains each
-platform's tsc on the set of `scripts/goport/pgo-train.sh`, and the job fails unless the PGO tsc
-gives the same output as a plain build on that set. They have no BOLT: BOLT refuses the static
-Linux bin, macOS has no perf branch sampling for its profile, and BOLT has no PE (Windows)
-support. To make the Linux x64 tsc by
-hand on zbook, use
-`RELEASE_FEATURES=noembed RELEASE_LIBC=musl RELEASE_PIE=0 crates/ts_goport/scripts/build-release.sh <out>/linux-x64`
-and pack and test it:
-
-```sh
-GOPORT_PIN=<pin> scripts/goport/npm-pack.sh --name @effect-x/tsc --package-version <v> \
-  --also linux-arm64=<linux-arm64 tsc from the release workflow> \
-  --also darwin-arm64=<darwin-arm64 tsc from the release workflow> \
-  --also darwin-x64=<darwin-x64 tsc from the release workflow> \
-  --also win32-x64=<win32-x64 tsc.exe from the release workflow> \
-  --also win32-arm64=<win32-arm64 tsc.exe from the release workflow> <out>/pkg <out>/linux-x64/bin/tsgo
-scripts/goport/npm-test.sh --name @effect-x/tsc <out>/pkg <out>/test
-```
-
-### Trusted publishing
-
-npm trusts the workflow file `release.yml` of `effect-anything/tsc`, in the GitHub environment
-`npm`, to publish each of the 7 packages (OIDC, no token). Set it up once with
-`npm/trust-setup.sh`, logged in to npm with 2FA and npm 11.15.0 or later. It publishes a
-`0.0.0-placeholder` version of a package that is not on npm yet, because npm can only trust a
-workflow for a package that exists. The workflow refuses `0.0.x` tags, so a release never
-collides with a placeholder. npm drops a new trust that publishes nothing in 2 days, so run it
-shortly before the first tag. Add required reviewers to the `npm` environment (repo settings,
-Environments) to approve each publish by hand.
-
-The first publish binds each trust to the repo's GitHub ID, not only its name. After the repo is
-recreated, run `npm/trust-setup.sh --relink`: it revokes the old trusts and creates new ones for
-the new repo. The 2026-10-07 recreation needs no relink: v0.1.0 already published from the new
-repo. To add a platform package, run plain `npm/trust-setup.sh` shortly before the next tag: it
-publishes the new package's placeholder, adds its trust and leaves the other packages as they are.
-
-While the repo is private, npm publishes with no provenance. From a public repo it adds
-provenance by itself.
-
-The packages carry the port's MIT LICENSE and a NOTICE.txt with the licenses of TypeScript
-(Apache-2.0) and Go (BSD-3-Clause), from `NOTICE.md` and `licenses/` at the repo root.
+To pack multiple platforms into one `@effect-x/tsc` release set, pass `--also <os>-<arch>=<tsrs>`
+and `--ext <os>-<arch>=<dir>` for each additional target platform.
