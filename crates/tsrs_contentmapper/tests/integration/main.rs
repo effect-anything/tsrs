@@ -1,4 +1,5 @@
 mod host_test;
+mod mapper_protocol_test;
 mod path_test;
 #[cfg(unix)]
 mod process_test;

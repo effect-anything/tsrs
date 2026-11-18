@@ -307,6 +307,7 @@ pub fn resolve_content_mapper_manifest(
             );
         }
     };
+    let exec = crate::native_mapper::exec(host, &resolver, &package_directory, &name, exec);
     let compiler_options = cm.compiler_options.value.clone();
     let dynamic_config = cm.dynamic_config.value;
     if cm.output_extensions.is_present() && !cm.output_extensions.is_valid() {

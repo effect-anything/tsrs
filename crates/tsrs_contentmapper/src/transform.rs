@@ -75,6 +75,9 @@ pub fn parse_result(
         // them with the file now so they are reported against it.
         for diagnostic in &result.diagnostics {
             diagnostic.set_file(Some(source_file));
+            for rel in diagnostic.related_information() {
+                rel.set_file(Some(source_file));
+            }
         }
         let mut diagnostics = source_file.diagnostics().to_vec();
         diagnostics.extend_from_slice(&result.diagnostics);

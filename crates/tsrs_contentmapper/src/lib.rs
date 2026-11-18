@@ -7,6 +7,7 @@
 
 pub mod host;
 pub mod hostimpl;
+pub mod mapper_protocol;
 pub mod process;
 pub mod transform;
 

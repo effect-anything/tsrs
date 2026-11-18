@@ -151,10 +151,12 @@ pub struct MappedSpan {
 // spanmap.go:129
 #[derive(Debug)]
 pub struct SpanMap {
-    segments: Vec<Segment>,
+    pub(crate) segments: Vec<Segment>,
 
     // Go `origOnce` + `originalIndex`: the interval index used for original-to-virtual lookups, built on first use.
-    original_index: OnceLock<OriginalIndex>,
+    pub(crate) original_index: OnceLock<OriginalIndex>,
+
+    pub(crate) mapper_info: crate::spanmap_ext::MapperInfo,
 }
 
 // Validation failures. A content mapper is required to provide a valid span map; these describe the
@@ -307,7 +309,11 @@ pub fn validate(m: Option<&SpanMap>, virtual_: &str, original: &str) -> Option<M
 pub fn new(segments: &[Segment]) -> P<SpanMap> {
     let mut sorted = segments.to_vec();
     goslices::sort_func(&mut sorted, |a, b| a.virtual_start.cmp(&b.virtual_start));
-    P::new(SpanMap { segments: sorted, original_index: OnceLock::new() })
+    P::new(SpanMap {
+        segments: sorted,
+        original_index: OnceLock::new(),
+        mapper_info: crate::spanmap_ext::MapperInfo::default(),
+    })
 }
 
 impl SpanMap {
@@ -362,7 +368,8 @@ impl SpanMap {
 
         let orig_start = self.map_low(virtual_start, start_idx, start_in);
         let orig_end = self.map_high(virtual_end, end_idx, end_in).max(orig_start);
-        (new_text_range(orig_start, orig_end), Fidelity::Approximate)
+        let ends = (virtual_start, virtual_end, orig_start, orig_end);
+        crate::spanmap_ext::union_span(&self.segments, ends, start_in && end_in)
     }
 }
 

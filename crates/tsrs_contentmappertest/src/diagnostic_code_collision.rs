@@ -34,6 +34,7 @@ impl ipc::Handler for DiagnosticCodeCollisionHandler {
                         start,
                         length: "foo".len() as i64,
                         code: diagnostics::FUNCTION_MUST_HAVE_AN_EXPLICIT_RETURN_TYPE_ANNOTATION_WITH_ISOLATED_DECLARATIONS.code(),
+                        ..Default::default()
                     }],
                     ..Default::default()
                 }

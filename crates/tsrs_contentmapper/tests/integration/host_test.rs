@@ -168,6 +168,7 @@ impl Handler for FakeMapper {
                         start: 0,
                         length: 3.min(p.content.len()) as i64,
                         code: 9999,
+                        ..Default::default()
                     }],
                     ..Default::default()
                 }
@@ -273,12 +274,14 @@ impl Handler for UnicodeMapper {
                             }],
                             Vec::new(),
                         )),
+                        ..Default::default()
                     },
                     diagnostics: vec![Diagnostic {
                         message_text: "after non-ASCII character".to_string(),
                         start: emoji_length,
                         length: text_length - emoji_length,
                         code: 1001,
+                        ..Default::default()
                     }],
                     ..Default::default()
                 }

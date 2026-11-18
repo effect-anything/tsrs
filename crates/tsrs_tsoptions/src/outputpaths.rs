@@ -192,7 +192,7 @@ pub fn get_output_paths_for(
         paths.external_output_file_path =
             get_external_output_file_name(source_file.file_name(), options, host);
     }
-    if source_file.content_mapper().is_empty()
+    if tsrs_spanmap::emits_javascript(source_file.content_mapper())
         && (force.js || options.emit_declaration_only != tsrs_core::Tristate::True)
         && !is_json_emitted_to_same_location
     {

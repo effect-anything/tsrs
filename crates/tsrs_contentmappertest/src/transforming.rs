@@ -84,6 +84,7 @@ impl ipc::Handler for Handler {
                         extension: mapped_extension(&p.content),
                         mappings: Some(mappings),
                         diagnostic_directives,
+                        ..Default::default()
                     },
                     diagnostics,
                     ..Default::default()
@@ -144,6 +145,7 @@ fn transform(content: &str, options: Option<&JsonMap>) -> Result<TransformOutput
                 start: token_start as i64,
                 length: (line_end - token_start) as i64,
                 code: UNCLOSED_INTERPOLATION_CODE,
+                ..Default::default()
             });
             pos = line_end;
             continue;

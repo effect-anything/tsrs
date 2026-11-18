@@ -396,6 +396,7 @@ pub struct MappedOutput {
     // DiagnosticDirectives describe framework directives that suppress TypeScript diagnostics in
     // virtual ranges and optionally report an error when no diagnostic is produced.
     pub diagnostic_directives: Option<DiagnosticDirectives>,
+    pub ext: crate::mapper_protocol::MappedOutputExt,
 }
 
 impl MappedOutput {
@@ -410,6 +411,7 @@ impl MappedOutput {
         if let Some(diagnostic_directives) = &self.diagnostic_directives {
             o.insert("diagnosticDirectives".to_string(), diagnostic_directives.marshal_json());
         }
+        self.ext.marshal_members(o);
     }
 
     // Decodes `member` if it is one of MappedOutput's; gives it back otherwise.
@@ -429,7 +431,7 @@ impl MappedOutput {
                     member => Some(DiagnosticDirectives::unmarshal_json(member, pointer)?),
                 };
             }
-            _ => return Ok(Some(member)),
+            _ => return self.ext.unmarshal_member(name, member, pointer),
         }
         Ok(None)
     }
@@ -739,6 +741,7 @@ pub struct Diagnostic {
     pub start: i64,
     pub length: i64,
     pub code: i32,
+    pub ext: crate::mapper_protocol::DiagnosticExt,
 }
 
 impl ProtocolJson for Diagnostic {
@@ -748,6 +751,7 @@ impl ProtocolJson for Diagnostic {
         o.insert("start".to_string(), int_json(self.start));
         o.insert("length".to_string(), int_json(self.length));
         o.insert("code".to_string(), Value::Number(f64::from(self.code)));
+        self.ext.marshal_members(&mut o);
         Value::Object(o)
     }
 
@@ -762,6 +766,9 @@ impl ProtocolJson for Diagnostic {
                 "start" => v.start = unmarshal_int(&member, "int", i64::MIN, i64::MAX, pointer)?,
                 "length" => v.length = unmarshal_int(&member, "int", i64::MIN, i64::MAX, pointer)?,
                 "code" => v.code = unmarshal_int32(&member, "int32", pointer)?,
+                "category" | "relatedInformation" => {
+                    v.ext.unmarshal_member(&name, member, pointer)?;
+                }
                 _ => {}
             }
         }
@@ -2195,6 +2202,7 @@ fn decode_transform_result(
             d.code,
             &d.message_text,
         ));
+        d.ext.apply(result.diagnostics.last().copied(), |p| original_positions.normalize(p));
     }
     Ok(result)
 }
@@ -2225,6 +2233,13 @@ fn decode_mapped_output<'a>(
         }
         None => tsrs_spanmap::new(&[]),
     };
+    let mut mappings = Some(mappings);
+    crate::mapper_protocol::attach_mapper_info(
+        &mut mappings,
+        &output.ext,
+        |p| virtual_positions.normalize(p),
+        |p| original_positions.normalize(p),
+    );
     let diagnostic_directives = normalize_diagnostic_directives(
         output.diagnostic_directives.as_ref(),
         &virtual_positions,
@@ -2234,7 +2249,7 @@ fn decode_mapped_output<'a>(
     let result = MappedResult {
         text: output.text,
         virtual_extension: output.extension,
-        mappings: Some(mappings),
+        mappings,
         diagnostic_directives,
     };
     Ok((result, original_positions))
@@ -2496,11 +2511,11 @@ fn is_empty_json(value: &Value) -> bool {
 }
 
 // A Go int, exactly: f64 cannot hold every i64.
-fn int_json(n: i64) -> Value {
+pub(crate) fn int_json(n: i64) -> Value {
     if n.unsigned_abs() <= 1 << 53 { Value::Number(n as f64) } else { Value::Integer(n) }
 }
 
-fn member_pointer(pointer: &str, name: &str) -> String {
+pub(crate) fn member_pointer(pointer: &str, name: &str) -> String {
     format!("{pointer}/{name}")
 }
 
@@ -2524,7 +2539,11 @@ fn type_error(kind: &str, go_type: &str, pointer: &str) -> String {
 }
 
 // The members of an object to decode into a Go struct; None for null (the zero value).
-fn unmarshal_struct(value: Value, go_type: &str, pointer: &str) -> Result<Option<JsonMap>, String> {
+pub(crate) fn unmarshal_struct(
+    value: Value,
+    go_type: &str,
+    pointer: &str,
+) -> Result<Option<JsonMap>, String> {
     match value {
         Value::Object(members) => Ok(Some(members)),
         Value::Null => Ok(None),
@@ -2533,7 +2552,7 @@ fn unmarshal_struct(value: Value, go_type: &str, pointer: &str) -> Result<Option
 }
 
 // A Go slice decoded element by element; empty for null (Go's nil slice).
-fn unmarshal_slice<T>(
+pub(crate) fn unmarshal_slice<T>(
     value: Value,
     go_type: &str,
     pointer: &str,
@@ -2551,7 +2570,7 @@ fn unmarshal_slice<T>(
 }
 
 // A Go string; "" for null.
-fn unmarshal_string(value: Value, pointer: &str) -> Result<String, String> {
+pub(crate) fn unmarshal_string(value: Value, pointer: &str) -> Result<String, String> {
     match value {
         Value::String(s) => Ok(s),
         Value::Null => Ok(String::new()),
@@ -2559,9 +2578,18 @@ fn unmarshal_string(value: Value, pointer: &str) -> Result<String, String> {
     }
 }
 
+// A Go bool; false for null.
+pub(crate) fn unmarshal_bool(value: &Value, pointer: &str) -> Result<bool, String> {
+    match *value {
+        Value::Bool(b) => Ok(b),
+        Value::Null => Ok(false),
+        _ => Err(type_error(json_kind(value), "bool", pointer)),
+    }
+}
+
 // A Go integer of the given range; 0 for null. Go also rejects an integral number written with a fraction or an
 // exponent (1.0, 1e3), which the parsed value cannot tell apart from an integer literal.
-fn unmarshal_int(
+pub(crate) fn unmarshal_int(
     value: &Value,
     go_type: &str,
     min: i64,
@@ -2591,7 +2619,7 @@ fn unmarshal_int(
     }
 }
 
-fn unmarshal_int32(value: &Value, go_type: &str, pointer: &str) -> Result<i32, String> {
+pub(crate) fn unmarshal_int32(value: &Value, go_type: &str, pointer: &str) -> Result<i32, String> {
     unmarshal_int(value, go_type, i64::from(i32::MIN), i64::from(i32::MAX), pointer)
         .map(|n| n as i32)
 }

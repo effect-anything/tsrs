@@ -12,6 +12,7 @@ pub mod diagnostics;
 pub mod enummaps;
 pub mod errors;
 pub mod namemap;
+pub mod native_mapper;
 pub mod parsedbuildcommandline;
 pub mod parsedcommandline;
 pub mod parsedoptions;

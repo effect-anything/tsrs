@@ -9,22 +9,21 @@
 //! This is tsover's `checkBinaryLikeExpressionWorker` hook. Emit still
 //! prints `__tsover_*`.
 
-use crate::ast::{get_source_file_of_node, is_function_like_declaration, is_prologue_directive};
-use crate::astdata::SyntaxKind;
-use crate::checker::Checker;
-use crate::core::{Node, TypeId};
-use crate::flags::{SignatureKind, TypeFlags};
+use crate::*;
 
 /// The binary expression to show when hover is on an overloaded operator.
 ///
 /// Stock quickinfo ignores a `+` token. In a `"use tsover"` or `"use gpu"`
 /// scope the expression type is the overload result, so hover should name it.
-pub fn hover_expression(node: Node) -> Option<Node> {
-    let expr = if node.kind() == SyntaxKind::BinaryExpression {
+#[must_use]
+pub fn hover_expression(node: P<Node>) -> Option<P<Node>> {
+    let expr = if node.kind() == Kind::BinaryExpression {
         node
     } else {
-        let parent = node.parent();
-        if parent.kind() == SyntaxKind::BinaryExpression && parent.operator_token() == node {
+        let parent = node.parent()?;
+        if parent.kind() == Kind::BinaryExpression
+            && parent.as_binary_expression().operator_token == node
+        {
             parent
         } else {
             return None;
@@ -33,19 +32,33 @@ pub fn hover_expression(node: Node) -> Option<Node> {
     in_overload_scope(expr).then_some(expr)
 }
 
-/// The checker's hook. `+` stays in the tree. A `Symbol.operatorPlus` (and
-/// the other five) on either operand supplies the type, and a compound
-/// assignment is checked against it. Emit turns it into `__tsover_*` later.
+/// Checks whether a prologue directive expression names `use <name>`.
+#[must_use]
+pub fn is_named_directive(node: P<Node>, name: &str) -> bool {
+    let text = node.text();
+    let unquoted = text
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| text.strip_prefix('\'')?.strip_suffix('\''))
+        .unwrap_or(text);
+    unquoted.strip_prefix("use ") == Some(name)
+}
+
+/// Checks overloaded binary operators in `"use tsover"` and `"use gpu"` scopes.
+///
+/// `+` stays in the tree. A `Symbol.operatorPlus` (and the other five) on
+/// either operand supplies the type, and a compound assignment is checked
+/// against it. Emit turns it into `__tsover_*` later.
 pub fn check_binary(
     checker: &mut Checker,
-    left: Node,
-    operator: SyntaxKind,
-    right: Node,
-    left_type: TypeId,
-    right_type: TypeId,
-) -> Option<TypeId> {
+    left: P<Node>,
+    operator: Kind,
+    right: P<Node>,
+    left_type: P<Type>,
+    right_type: P<Type>,
+) -> Option<P<Type>> {
     let overloaded = binary_type(checker, left, operator, right, left_type, right_type)?;
-    if crate::ast::is_compound_assignment(operator) {
+    if ast::is_compound_assignment(operator) {
         checker.check_assignment_operator(left, operator, right, left_type, overloaded);
     }
     Some(overloaded)
@@ -54,12 +67,12 @@ pub fn check_binary(
 /// The type of `left operator right`, when an overload symbol applies.
 pub fn binary_type(
     checker: &mut Checker,
-    left: Node,
-    operator: SyntaxKind,
-    right: Node,
-    left_type: TypeId,
-    right_type: TypeId,
-) -> Option<TypeId> {
+    left: P<Node>,
+    operator: Kind,
+    _right: P<Node>,
+    left_type: P<Type>,
+    right_type: P<Type>,
+) -> Option<P<Type>> {
     let symbol = symbol_name(operator)?;
     if !in_overload_scope(left) {
         return None;
@@ -77,9 +90,7 @@ pub fn binary_type(
         if is_defer(checker, result, defer) {
             result = None;
         }
-        let Some(result) = result else {
-            return None;
-        };
+        let result = result?;
         results.push(result);
     }
     if results.is_empty() {
@@ -91,120 +102,105 @@ pub fn binary_type(
     Some(checker.get_union_type(&results))
 }
 
-fn symbol_name(operator: SyntaxKind) -> Option<&'static str> {
+fn symbol_name(operator: Kind) -> Option<&'static str> {
     let base = match operator {
-        SyntaxKind::PlusEqualsToken => SyntaxKind::PlusToken,
-        SyntaxKind::MinusEqualsToken => SyntaxKind::MinusToken,
-        SyntaxKind::AsteriskEqualsToken => SyntaxKind::AsteriskToken,
-        SyntaxKind::SlashEqualsToken => SyntaxKind::SlashToken,
-        SyntaxKind::AsteriskAsteriskEqualsToken => SyntaxKind::AsteriskAsteriskToken,
-        SyntaxKind::PercentEqualsToken => SyntaxKind::PercentToken,
+        Kind::PlusEqualsToken => Kind::PlusToken,
+        Kind::MinusEqualsToken => Kind::MinusToken,
+        Kind::AsteriskEqualsToken => Kind::AsteriskToken,
+        Kind::SlashEqualsToken => Kind::SlashToken,
+        Kind::AsteriskAsteriskEqualsToken => Kind::AsteriskAsteriskToken,
+        Kind::PercentEqualsToken => Kind::PercentToken,
         other => other,
     };
     match base {
-        SyntaxKind::PlusToken => Some("operatorPlus"),
-        SyntaxKind::MinusToken => Some("operatorMinus"),
-        SyntaxKind::AsteriskToken => Some("operatorStar"),
-        SyntaxKind::SlashToken => Some("operatorSlash"),
-        SyntaxKind::AsteriskAsteriskToken => Some("operatorStarStar"),
-        SyntaxKind::PercentToken => Some("operatorPercent"),
+        Kind::PlusToken => Some("operatorPlus"),
+        Kind::MinusToken => Some("operatorMinus"),
+        Kind::AsteriskToken => Some("operatorStar"),
+        Kind::SlashToken => Some("operatorSlash"),
+        Kind::AsteriskAsteriskToken => Some("operatorStarStar"),
+        Kind::PercentToken => Some("operatorPercent"),
         _ => None,
     }
 }
 
-fn in_overload_scope(node: Node) -> bool {
-    let file = get_source_file_of_node(node);
-    if file.is_some()
-        && (prologue_has(file.statements(), "use tsover")
-            || prologue_has(file.statements(), "use gpu"))
-    {
-        return true;
+fn in_overload_scope(node: P<Node>) -> bool {
+    if let Some(file) = ast::get_source_file_of_node(node) {
+        let statements = file.statements.nodes();
+        if prologue_has(statements, "use tsover") || prologue_has(statements, "use gpu") {
+            return true;
+        }
     }
-    let mut current = node;
-    while current.is_some() {
-        if is_function_like_declaration(current) {
-            let body = current.body();
-            if body.kind() == SyntaxKind::Block
-                && (prologue_has(body.statements(), "use gpu")
-                    || prologue_has(body.statements(), "use tsover"))
-            {
+    let mut current = Some(node);
+    while let Some(curr) = current {
+        if ast::is_function_like_declaration(curr)
+            && let Some(body) = curr.body()
+            && body.kind() == Kind::Block
+        {
+            let statements = body.as_block().statements.nodes();
+            if prologue_has(statements, "use gpu") || prologue_has(statements, "use tsover") {
                 return true;
             }
         }
-        current = current.parent();
+        current = curr.parent();
     }
     false
 }
 
-fn prologue_has(statements: impl IntoIterator<Item = Node>, text: &str) -> bool {
-    for statement in statements {
-        if !is_prologue_directive(statement) {
+fn prologue_has(statements: &[P<Node>], text: &str) -> bool {
+    let name = text.strip_prefix("use ").unwrap_or(text);
+    for &statement in statements {
+        if !ast::is_prologue_directive(statement) {
             return false;
         }
-        if super::tsover::is_named_directive(
-            statement.expression(),
-            text.strip_prefix("use ").unwrap_or(text),
-        ) {
+        if let Some(expr) = statement.expression()
+            && is_named_directive(expr, name)
+        {
             return true;
         }
     }
     false
 }
 
-fn pairs(checker: &mut Checker, left: TypeId, right: TypeId) -> Vec<(TypeId, TypeId)> {
+fn pairs(checker: &mut Checker, left: P<Type>, right: P<Type>) -> Vec<(P<Type>, P<Type>)> {
     let left_members = members(checker, left);
     let right_members = members(checker, right);
     if left_members.len() == 1 && right_members.len() == 1 {
         return vec![(left_members[0], right_members[0])];
     }
     let mut out = Vec::new();
-    for lhs in &left_members {
-        for rhs in &right_members {
-            out.push((*lhs, *rhs));
+    for &lhs in &left_members {
+        for &rhs in &right_members {
+            out.push((lhs, rhs));
         }
     }
     out
 }
 
-fn members(checker: &mut Checker, t: TypeId) -> Vec<TypeId> {
-    let flags = checker.ty(t).flags;
-    if flags.intersects(TypeFlags::UNION) {
-        let types = checker
-            .ty(t)
-            .as_union_or_intersection_type()
-            .types()
-            .to_vec();
-        return types
-            .into_iter()
-            .flat_map(|part| members(checker, part))
-            .collect();
+fn members(checker: &mut Checker, t: P<Type>) -> Vec<P<Type>> {
+    let flags = t.flags();
+    if flags.intersects(TypeFlags::Union) {
+        let types = t.types();
+        return types.iter().flat_map(|&part| members(checker, part)).collect();
     }
-    if flags.intersects(TypeFlags::TYPE_VARIABLE) {
-        let constraint = checker.get_base_constraint_of_type(t);
-        if constraint.is_some() && constraint != t {
-            return members(checker, constraint);
-        }
+    if flags.intersects(TypeFlags::TypeVariable)
+        && let Some(constraint) = checker.get_base_constraint_of_type(t)
+        && constraint != t
+    {
+        return members(checker, constraint);
     }
     vec![t]
 }
 
 fn signature_return(
     checker: &mut Checker,
-    operand: TypeId,
+    operand: P<Type>,
     property: &str,
-    left: TypeId,
-    right: TypeId,
-) -> Option<TypeId> {
-    let property_type = checker.get_type_of_property_of_type(operand, property);
-    if !property_type.is_some() {
-        return None;
-    }
-    let signatures: Vec<_> = checker
-        .get_signatures_of_type(property_type, SignatureKind::CALL)
-        .iter()
-        .copied()
-        .collect();
-    for signature in signatures {
+    left: P<Type>,
+    right: P<Type>,
+) -> Option<P<Type>> {
+    let property_type = checker.get_type_of_property_of_type(operand, property)?;
+    let signatures = checker.get_signatures_of_type(property_type, SignatureKind::Call);
+    for &signature in signatures {
         let first = checker.get_type_at_position(signature, 0);
         let second = checker.get_type_at_position(signature, 1);
         if checker.is_type_assignable_to(left, first)
@@ -216,18 +212,15 @@ fn signature_return(
     None
 }
 
-fn defer_operation_type(checker: &mut Checker) -> TypeId {
-    let constructor = checker.get_global_es_symbol_constructor_symbol_or_nil();
-    if !constructor.is_some() {
-        return TypeId::NIL;
-    }
+fn defer_operation_type(checker: &mut Checker) -> Option<P<Type>> {
+    let constructor = checker.get_global_es_symbol_constructor_symbol_or_nil()?;
     let constructor_type = checker.get_type_of_symbol(constructor);
     checker.get_type_of_property_of_type(constructor_type, "deferOperation")
 }
 
-fn is_defer(checker: &mut Checker, result: Option<TypeId>, defer: TypeId) -> bool {
-    match result {
-        Some(result) if defer.is_some() => checker.is_type_identical_to(result, defer),
+fn is_defer(checker: &mut Checker, result: Option<P<Type>>, defer: Option<P<Type>>) -> bool {
+    match (result, defer) {
+        (Some(result), Some(defer)) => checker.is_type_identical_to(result, defer),
         _ => false,
     }
 }

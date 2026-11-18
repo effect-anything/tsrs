@@ -2856,6 +2856,12 @@ impl Checker {
                 self.check_truthiness_of_type(left_type, left);
             }
         }
+        // PORT: operator overloading (ext_overload.rs).
+        if let Some(t) =
+            crate::ext_overload::check_binary(self, left, operator, right, left_type, right_type)
+        {
+            return t;
+        }
         match operator {
             Kind::AsteriskToken
             | Kind::AsteriskAsteriskToken
@@ -3645,7 +3651,7 @@ impl Checker {
     }
 
     // checker.go:12965
-    fn check_assignment_operator(
+    pub(crate) fn check_assignment_operator(
         &mut self,
         left: P<Node>,
         operator: Kind,

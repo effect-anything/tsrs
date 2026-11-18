@@ -168,6 +168,7 @@ pub(crate) use nodebuilderimpl_1::*;
 pub(crate) mod nodebuilderimpl_2;
 pub(crate) use nodebuilderimpl_2::*;
 pub mod emitresolver;
+pub mod ext_overload;
 mod nodebuilderscopes;
 mod nodecopy;
 mod pseudotypenodebuilder;
