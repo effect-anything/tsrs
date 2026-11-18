@@ -4,11 +4,11 @@
 //! calls, adds `**` for its own `"use tsover"` directive, and leaves the rest
 //! of the file alone. `typegpu` is a consumer: it wraps marked functions and
 //! records the tinyest AST of what this layer produced. Tests for that layer
-//! live in `tests/typegpu.rs`; these ask only about the rewrite.
+//! live in `typegpu.rs`; these ask only about the rewrite.
 
-use ts_goport::astdata::SyntaxKind;
-use ts_goport::ext::tsover::{self, Rewrite};
-use ts_goport::spanmap::Kind;
+use ts_ext_transform::tsover::{self, Rewrite};
+use tsrs_ast::Kind as SyntaxKind;
+use tsrs_spanmap::Kind;
 
 fn rewrite(code: &str) -> Rewrite {
     tsover::rewrite_text("a.ts", code).expect("the file asks for the rewrite")
@@ -124,9 +124,9 @@ fn a_file_without_a_directive_is_not_rewritten() {
 #[test]
 fn the_span_map_is_an_atom_on_the_operator() {
     let input = "\"use tsover\";\nexport const t = 1 + 2;\n";
-    let operator = input.find('+').expect("the operator") as i32;
+    let operator = u32::try_from(input.find('+').expect("the operator")).unwrap();
     let out = rewrite(input);
-    let call = out.code.find("__tsover_add").expect("the call") as i32;
+    let call = u32::try_from(out.code.find("__tsover_add").expect("the call")).unwrap();
     let atom = out
         .segments
         .iter()
@@ -153,9 +153,7 @@ fn a_nested_marked_function_reports_nesting() {
     );
     let out = rewrite(code);
     assert!(
-        out.diagnostics
-            .iter()
-            .any(|d| d.message == "Nesting 'use gpu' functions is not allowed"),
+        out.diagnostics.iter().any(|d| d.message == "Nesting 'use gpu' functions is not allowed"),
         "{:?}",
         out.diagnostics
     );

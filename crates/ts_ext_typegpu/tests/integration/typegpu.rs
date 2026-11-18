@@ -1,5 +1,5 @@
-//! Build-phase TypeGPU session. Sweetener expansion is not involved:
-//! [`expand`](ts_ext_syntax::expand) leaving `"use gpu"` alone is tested in
+//! Build-phase `TypeGPU` session. Sweetener expansion is not involved:
+//! `ts_ext_syntax::expand` leaving `"use gpu"` alone is tested in
 //! `ts_ext_syntax`.
 
 use ts_ext_typegpu::TypegpuSession;
@@ -7,14 +7,7 @@ use ts_ext_typegpu::TypegpuSession;
 /// Build output. Every one of these four shapes was wrong before the fix:
 /// the operator call, the wrapper's arrow parameter, the payload's trailing
 /// commas, and the export of a hoisted marked function.
-///
-/// The operator rewrite and the metadata wrap parse one file at a time,
-/// and a publish of the compiler's own files refuses two threads at once.
-/// The parses themselves are not shared: see `transforms_do_not_share_a_parse`.
-static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn build(code: &str) -> String {
-    let _guard = BUILD.lock().unwrap_or_else(|error| error.into_inner());
     TypegpuSession::build().transform("a.ts", code).code
 }
 
@@ -28,19 +21,13 @@ fn build_rewrites_the_operator_once() {
 #[test]
 fn build_payload_has_no_trailing_comma() {
     let out = build("function add(a, b) { \"use gpu\"; return a + b }");
-    assert!(
-        out.contains("body: [0, [[10, [1, \"a\", \"+\", \"b\"]]]]"),
-        "{out}"
-    );
+    assert!(out.contains("body: [0, [[10, [1, \"a\", \"+\", \"b\"]]]]"), "{out}");
 }
 
 #[test]
 fn build_wrapper_arrow_has_no_extra_parentheses() {
     let out = build("function add(a, b) { \"use gpu\"; return a + b }");
-    assert!(
-        out.contains("/*#__PURE__*/($ => (globalThis.__TYPEGPU_META__"),
-        "{out}"
-    );
+    assert!(out.contains("/*#__PURE__*/($ => (globalThis.__TYPEGPU_META__"), "{out}");
 }
 
 #[test]
@@ -50,10 +37,7 @@ fn build_hoists_an_exported_marked_function_and_keeps_the_export() {
     assert!(out.contains("return __tsover_add(a, b);"), "{out}");
     assert!(out.contains("export { add };"), "{out}");
     assert!(!out.contains("export function add"), "{out}");
-    assert!(
-        out.find("const add =").unwrap() < out.find("console.log(add)").unwrap(),
-        "{out}"
-    );
+    assert!(out.find("const add =").unwrap() < out.find("console.log(add)").unwrap(), "{out}");
 }
 
 #[test]
@@ -64,8 +48,8 @@ fn build_appends_exports_in_source_order() {
         "export function mul(a, b) {\n  \"use gpu\";\n  return a * b;\n}\n",
     );
     let out = build(code);
-    let add = out.find("export { add };").expect("{out}");
-    let mul = out.find("export { mul };").expect("{out}");
+    let add = out.find("export { add };").unwrap_or_else(|| panic!("{out}"));
+    let mul = out.find("export { mul };").unwrap_or_else(|| panic!("{out}"));
     assert!(add < mul, "{out}");
 }
 
@@ -103,8 +87,8 @@ fn build_names_a_tagged_template_resource_chain() {
 fn build_hoists_a_default_exported_marked_function() {
     let code = "console.log(add);\n\nexport default function add(a, b) {\n  \"use gpu\";\n  return a + b;\n}\n";
     let out = build(code);
-    let decl = out.find("const add =").expect("{out}");
-    let log = out.find("console.log(add)").expect("{out}");
+    let decl = out.find("const add =").unwrap_or_else(|| panic!("{out}"));
+    let log = out.find("console.log(add)").unwrap_or_else(|| panic!("{out}"));
     assert!(decl < log, "{out}");
     assert!(out.contains("export default add;"), "{out}");
     assert!(!out.contains("export default function"), "{out}");
@@ -121,7 +105,7 @@ fn build_ends_an_anonymous_default_export_with_a_semicolon() {
 #[test]
 fn build_reports_a_body_the_transpiler_refuses() {
     let code = "function outer(a, b) {\n  \"use gpu\";\n  const inner = () => a + b;\n  return inner();\n}\n";
-    let arrow = code.find("() =>").unwrap() as u32;
+    let arrow = u32::try_from(code.find("() =>").unwrap()).unwrap();
     let out = build_with_reports(code);
     let diag = out
         .diagnostics
@@ -148,7 +132,7 @@ fn build_reports_a_body_the_transpiler_refuses() {
 fn a_nested_directive_is_reported_on_the_inner_directive() {
     let code =
         "function outer() {\n  \"use gpu\";\n  function inner() {\n    \"use gpu\";\n  }\n}\n";
-    let inner = code.rfind("\"use gpu\"").unwrap() as u32;
+    let inner = u32::try_from(code.rfind("\"use gpu\"").unwrap()).unwrap();
     let out = TypegpuSession::check().transform("a.ts", code);
     let diag = out
         .diagnostics
@@ -164,7 +148,6 @@ fn a_nested_directive_is_reported_on_the_inner_directive() {
 }
 
 fn build_with_reports(code: &str) -> ts_ext_typegpu::Transformed {
-    let _guard = BUILD.lock().unwrap_or_else(|error| error.into_inner());
     TypegpuSession::build().transform("a.ts", code)
 }
 
@@ -224,35 +207,23 @@ fn build_reports_a_prefix_update() {
 
 fn assert_refused(code: &str, message: &str) {
     let out = build_with_reports(code);
-    assert!(
-        out.diagnostics.iter().any(|d| d.message == message),
-        "{:?}",
-        out.diagnostics
-    );
+    assert!(out.diagnostics.iter().any(|d| d.message == message), "{:?}", out.diagnostics);
     assert!(out.code.contains("body: [0, []]"), "{}", out.code);
 }
 
-/// Two builds in one process. The first parse used to be published into
-/// the process parse store, so a later transform could read it. Each build
-/// now keeps its parse in a store that it drops, and the second file is
-/// not the first file's text.
+/// Two builds in one process. Each build keeps its parse in a scratch arena
+/// region that it drops before returning, and the second file does not see
+/// the first file's text.
 #[test]
 fn transforms_do_not_share_a_parse() {
-    let _guard = BUILD.lock().unwrap_or_else(|error| error.into_inner());
     let first = "function add(a, b) { \"use gpu\"; return a + b }";
     let second = "function mul(a, b) { \"use gpu\"; return a * b }";
-    let published_before = ts_goport::ast::unpublished_file_ids();
     let left = TypegpuSession::build().transform("left.ts", first).code;
     let right = TypegpuSession::build().transform("right.ts", second).code;
     assert!(left.contains("__tsover_add"), "{left}");
     assert!(!left.contains("__tsover_mul"), "{left}");
     assert!(right.contains("__tsover_mul"), "{right}");
     assert!(!right.contains("__tsover_add"), "{right}");
-    assert_eq!(
-        ts_goport::ast::unpublished_file_ids(),
-        published_before,
-        "a transform left a file in the process parse store"
-    );
 }
 
 /// Every captured case. `cases.jsonl` names the directory, the auto-naming
@@ -275,12 +246,9 @@ fn captured_cases_match_their_structure() {
         let theirs = std::fs::read_to_string(dir.join("theirs.ts"))
             .unwrap_or_else(|err| panic!("{id} theirs.ts: {err}"));
         let auto_naming = line.contains("\"autoNaming\":true");
-        let built = {
-            let _guard = BUILD.lock().unwrap_or_else(|error| error.into_inner());
-            TypegpuSession::build_with_auto_naming(auto_naming)
-                .transform(&format!("{id}.ts"), &input)
-                .code
-        };
+        let built = TypegpuSession::build_with_auto_naming(auto_naming)
+            .transform(&format!("{id}.ts"), &input)
+            .code;
         if line.contains("\"compare\":\"metadata\"") {
             if meta_json(&built) != theirs.trim() {
                 failures.push(id);
@@ -294,10 +262,7 @@ fn captured_cases_match_their_structure() {
             && !theirs.contains("function")
             && !theirs.contains("__TYPEGPU_META__");
         let (left, right) = if externals_only {
-            (
-                theirs.trim().to_owned(),
-                externals_object(&built).to_owned(),
-            )
+            (theirs.trim().to_owned(), externals_object(&built).to_owned())
         } else {
             (theirs, built)
         };
@@ -307,25 +272,15 @@ fn captured_cases_match_their_structure() {
         }
         ran += 1;
     }
-    let listed = manifest
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .count() as u32;
+    let listed =
+        u32::try_from(manifest.lines().filter(|line| !line.trim().is_empty()).count()).unwrap();
     assert_eq!(ran, listed, "a manifest row did not run");
-    assert!(
-        failures.is_empty(),
-        "{} cases differ: {}",
-        failures.len(),
-        failures.join(", ")
-    );
+    assert!(failures.is_empty(), "{} cases differ: {}", failures.len(), failures.join(", "));
 }
 
 fn json_string(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":\"");
-    let start = line
-        .find(&needle)
-        .unwrap_or_else(|| panic!("no {key} in {line}"))
-        + needle.len();
+    let start = line.find(&needle).unwrap_or_else(|| panic!("no {key} in {line}")) + needle.len();
     line[start..].split('"').next().unwrap_or("").to_owned()
 }
 
@@ -344,7 +299,7 @@ fn externals_object(text: &str) -> &str {
             '}' => {
                 depth -= 1;
                 if depth == 0 {
-                    return &text[start..start + index + 1];
+                    return &text[start..=start + index];
                 }
             }
             _ => {}
@@ -353,7 +308,7 @@ fn externals_object(text: &str) -> &str {
     text
 }
 
-/// Generated columns of a TypeGPU rewrite, mapped back to the author's
+/// Generated columns of a `TypeGPU` rewrite, mapped back to the author's
 /// line and column. Lines are 0-based. Columns are UTF-16 units, which is
 /// what a source map records.
 #[test]
@@ -387,14 +342,8 @@ fn source_map_names_each_operator_of_a_nested_call() {
     let out = rewrite_mapped(input);
     let add = out.code.find("__tsover_add").expect("add");
     let mul = out.code.find("__tsover_mul").expect("mul");
-    assert_eq!(
-        original_line_col(&out, input, add),
-        line_col(input, input.find('+').unwrap())
-    );
-    assert_eq!(
-        original_line_col(&out, input, mul),
-        line_col(input, input.find('*').unwrap())
-    );
+    assert_eq!(original_line_col(&out, input, add), line_col(input, input.find('+').unwrap()));
+    assert_eq!(original_line_col(&out, input, mul), line_col(input, input.find('*').unwrap()));
     let c = out.code.find(", c)").expect("operand c") + 2;
     assert_eq!(
         original_line_col(&out, input, c),
@@ -412,7 +361,7 @@ fn source_map_names_both_sides_of_an_assignment() {
     let mut found = 0;
     let mut search = out.code.as_str();
     let mut base = 0usize;
-    while let Some(at) = search.find("a") {
+    while let Some(at) = search.find('a') {
         let pos = base + at;
         if original_line_col(&out, input, pos) == author_a {
             found += 1;
@@ -429,35 +378,35 @@ fn source_map_names_both_sides_of_an_assignment() {
 
 struct Mapped {
     code: String,
-    segments: Vec<ts_goport::spanmap::Segment>,
+    segments: Vec<tsrs_spanmap::Segment>,
 }
 
 fn rewrite_mapped(input: &str) -> Mapped {
-    let _guard = BUILD.lock().unwrap_or_else(|error| error.into_inner());
-    let rewritten = ts_goport::ext::tsover::rewrite_text("a.ts", input).expect("rewrite");
-    Mapped {
-        code: rewritten.code,
-        segments: rewritten.segments,
-    }
+    let rewritten = ts_ext_transform::tsover::rewrite_text("a.ts", input).expect("rewrite");
+    Mapped { code: rewritten.code, segments: rewritten.segments }
 }
 
-fn original_line_col(mapped: &Mapped, input: &str, generated: usize) -> (i32, i32) {
-    let offset = i32::try_from(generated).unwrap_or(0);
+fn original_line_col(mapped: &Mapped, input: &str, generated: usize) -> (u32, u32) {
+    let offset = u32::try_from(generated).unwrap_or(0);
     let segment = mapped
         .segments
         .iter()
         .find(|segment| offset >= segment.virtual_start && offset < segment.virtual_end)
         .unwrap_or_else(|| panic!("no segment at {generated} in {}", mapped.code));
-    let original = if segment.kind == ts_goport::spanmap::Kind::VERBATIM {
+    let original = if segment.kind == tsrs_spanmap::Kind::VERBATIM {
         segment.original_start + (offset - segment.virtual_start)
     } else {
         segment.original_start
     };
-    line_col(input, usize::try_from(original.max(0)).unwrap_or(0))
+    line_col(input, original as usize)
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "captured TypeGPU metadata version is a small integer"
+)]
 fn meta_json(code: &str) -> String {
-    let items = ts_goport::ext::typegpu::embedded_metadata("a.ts", code);
+    let items = ts_ext_transform::typegpu::embedded_metadata("a.ts", code);
     let parts = items
         .iter()
         .map(|item| {
@@ -480,17 +429,11 @@ fn meta_json(code: &str) -> String {
 #[test]
 fn early_pruning_matches_the_bun_plugin() {
     let code = "const myStruct = d.struct({ value: d.f32 });";
-    assert_eq!(ts_goport::ext::typegpu::embed_metadata("a.ts", code), code);
-    let pruned = TypegpuSession::build()
-        .early_pruning(true)
-        .transform("a.ts", code);
+    assert_eq!(ts_ext_transform::typegpu::embed_metadata("a.ts", code), code);
+    let pruned = TypegpuSession::build().early_pruning(true).transform("a.ts", code);
     assert_eq!(pruned.code, code);
     let named = TypegpuSession::build().transform("a.ts", code);
-    assert!(
-        named.code.contains("__TYPEGPU_AUTONAME__"),
-        "{}",
-        named.code
-    );
+    assert!(named.code.contains("__TYPEGPU_AUTONAME__"), "{}", named.code);
     assert!(named.code.contains("\"myStruct\""), "{}", named.code);
 }
 
@@ -554,29 +497,17 @@ fn default_include_matches_the_plugin_regex() {
         "script.js.bak?query=1",
     ];
     for id in yes {
-        assert!(
-            ts_ext_typegpu::default_include_matches(id),
-            "{id} should match"
-        );
+        assert!(ts_ext_typegpu::default_include_matches(id), "{id} should match");
     }
     for id in no {
-        assert!(
-            !ts_ext_typegpu::default_include_matches(id),
-            "{id} should not match"
-        );
+        assert!(!ts_ext_typegpu::default_include_matches(id), "{id} should not match");
     }
     let marked = "function f() { \"use gpu\"; return 1 }\n";
-    let skipped = TypegpuSession::build()
-        .filter_id(true)
-        .transform("file.css", marked);
+    let skipped = TypegpuSession::build().filter_id(true).transform("file.css", marked);
     assert_eq!(skipped.code, marked);
-    let kept = TypegpuSession::build()
-        .filter_id(true)
-        .transform("file.ts", marked);
+    let kept = TypegpuSession::build().filter_id(true).transform("file.ts", marked);
     assert!(kept.code.contains("__TYPEGPU_META__"), "{}", kept.code);
-    let excluded = TypegpuSession::build()
-        .exclude("secret.ts")
-        .transform("secret.ts", marked);
+    let excluded = TypegpuSession::build().exclude("secret.ts").transform("secret.ts", marked);
     assert_eq!(excluded.code, marked);
 }
 
@@ -627,22 +558,12 @@ fn embedded_metadata_matches_the_plugin_collector() {
     );
     assert_eq!(meta_json(&unrelated), "[]");
     let wrapped = TypegpuSession::build().transform("a.ts", &unrelated);
-    assert!(
-        wrapped.code.contains("__TYPEGPU_META__"),
-        "{}",
-        wrapped.code
-    );
+    assert!(wrapped.code.contains("__TYPEGPU_META__"), "{}", wrapped.code);
 }
 
-fn line_col(text: &str, offset: usize) -> (i32, i32) {
+fn line_col(text: &str, offset: usize) -> (u32, u32) {
     let offset = offset.min(text.len());
-    let line = text[..offset].bytes().filter(|byte| *byte == b'\n').count() as i32;
-    let start = text[..offset]
-        .rfind('\n')
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    (
-        line,
-        ts_goport::scanner_util::utf16_len(&text[start..offset]),
-    )
+    let line = u32::try_from(text[..offset].bytes().filter(|byte| *byte == b'\n').count()).unwrap();
+    let start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+    (line, ts_ext_transform::precheck::utf16_len(&text[start..offset]))
 }

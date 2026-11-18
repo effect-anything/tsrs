@@ -21,7 +21,6 @@ tsrs_parser.workspace = true
 tsrs_binder.workspace = true
 tsrs_printer.workspace = true
 tsrs_sourcemap.workspace = true
-base64.workspace = true
 rustc-hash.workspace = true
 
 [lints]

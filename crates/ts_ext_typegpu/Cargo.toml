@@ -19,12 +19,8 @@ tsrs_parser.workspace = true
 ts_ext_transform.workspace = true
 rustc-hash.workspace = true
 
-[dev-dependencies]
-tsrs_vfs.workspace = true
-tsrs_project.workspace = true
-
 [[example]]
-name = "capture_ours"
+name = "capture_typegpu"
 path = "scripts/capture_ours.rs"
 
 [lints]

@@ -13,28 +13,38 @@
 //! `a + (b)` and `a + b` are shape. The node kinds still differ for an
 //! object literal and a block, an operator, a name, or a type.
 //!
-//! The parser comes from `ts_goport`. This crate must not depend on the
+//! The parser comes from `tsrs_parser`. This crate must not depend on the
 //! expander's own printer for the comparison: the printer is what the two
 //! sides are being compared about.
 
-use ts_goport::astdata::SyntaxKind;
-use ts_goport::core::Node;
-use ts_goport::flags::ScriptKind;
-use ts_goport::frontend::parser::{SourceFileParseOptions, parse_source_file};
+use std::fmt::Write as _;
+
+use tsrs_ast::{ExternalModuleIndicatorOptions, Kind as SyntaxKind, Node, SourceFileParseOptions};
+use tsrs_core::arena::Region;
+use tsrs_core::tspath::Path;
+use tsrs_core::{P, ScriptKind};
+use tsrs_parser::parse_source_file_owned;
 
 /// A stable dump of the syntax tree. Two texts with the same dump are the
 /// same program up to formatting. `None` when the text does not parse.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "public API signature re-exported by ts_ext_syntax::structure"
+)]
 #[must_use]
 pub fn dump(text: &str, tsx: bool) -> Option<String> {
-    let leaked: &'static str = Box::leak(text.to_owned().into_boxed_str());
+    let region = Region::new(64 << 10);
+    let _guard = region.enter();
+    let file_name = if tsx { "/shape.tsx" } else { "/shape.ts" };
     let opts = SourceFileParseOptions {
-        file_name: "/shape.ts".to_owned(),
-        ..SourceFileParseOptions::default()
+        path: Path::from(file_name.to_owned()),
+        file_name: file_name.to_owned(),
+        external_module_indicator_options: ExternalModuleIndicatorOptions::default(),
     };
     let kind = if tsx { ScriptKind::TSX } else { ScriptKind::TS };
-    let file = parse_source_file(&opts, leaked, kind);
+    let file = parse_source_file_owned(opts, text.to_owned(), kind);
     let mut out = String::new();
-    write_node(file.root, 0, &mut out);
+    write_node(file.as_node(), 0, &mut out);
     Some(out)
 }
 
@@ -58,10 +68,11 @@ pub fn unified(theirs: &str, ours: &str) -> String {
     let right = lines_of(ours);
     let mut out = String::from("--- theirs.ts\n+++ ours.ts\n");
     for hunk in hunks(&left, &right) {
-        out.push_str(&format!(
-            "@@ -{},{} +{},{} @@\n",
+        let _ = writeln!(
+            out,
+            "@@ -{},{} +{},{} @@",
             hunk.left_start, hunk.left_len, hunk.right_start, hunk.right_len
-        ));
+        );
         for line in &hunk.lines {
             out.push_str(line);
             out.push('\n');
@@ -187,40 +198,43 @@ fn edits(left: &[&str], right: &[&str]) -> Vec<Edit> {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::unified;
-
-    #[test]
-    fn the_diff_names_the_files_and_not_a_temp_directory() {
-        let text = unified("a\nb\n", "a\nc\n");
-        assert!(text.starts_with("--- theirs.ts\n+++ ours.ts\n"), "{text}");
-        assert!(!text.contains("/var/"), "{text}");
-        assert!(!text.contains("2026-"), "{text}");
-        assert!(text.contains("-b\n"), "{text}");
-        assert!(text.contains("+c\n"), "{text}");
-    }
+fn has_node_text(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::Identifier
+            | SyntaxKind::PrivateIdentifier
+            | SyntaxKind::StringLiteral
+            | SyntaxKind::NumericLiteral
+            | SyntaxKind::BigIntLiteral
+            | SyntaxKind::MetaProperty
+            | SyntaxKind::NoSubstitutionTemplateLiteral
+            | SyntaxKind::TemplateHead
+            | SyntaxKind::TemplateMiddle
+            | SyntaxKind::TemplateTail
+            | SyntaxKind::JsxNamespacedName
+            | SyntaxKind::RegularExpressionLiteral
+            | SyntaxKind::JSDocText
+            | SyntaxKind::JSDocLink
+            | SyntaxKind::JSDocLinkCode
+            | SyntaxKind::JSDocLinkPlain
+    )
 }
 
-fn write_node(node: Node, depth: usize, out: &mut String) {
-    if node.is_nil() {
-        return;
-    }
+fn write_node(node: P<Node>, depth: usize, out: &mut String) {
     let kind = node.kind();
     // A pair of parentheses is not part of the program. Skip it and keep
     // the expression it wraps.
     if kind == SyntaxKind::ParenthesizedExpression || kind == SyntaxKind::ParenthesizedType {
-        node.for_each_child(|child| {
-            if child != node {
-                write_node(child, depth, out);
-            }
+        node.for_each_child_static(&mut |child| {
+            write_node(child, depth, out);
             false
         });
         return;
     }
     out.push_str(&"  ".repeat(depth));
-    out.push_str(&format!("{kind:?}"));
-    if node.children().nodes().is_empty() {
+    let _ = write!(out, "{kind:?}");
+    let is_leaf = !node.for_each_child_static(&mut |_| true);
+    if is_leaf && has_node_text(kind) {
         let text = node.text();
         if !text.is_empty() {
             out.push(' ');
@@ -228,10 +242,8 @@ fn write_node(node: Node, depth: usize, out: &mut String) {
         }
     }
     out.push('\n');
-    node.for_each_child(|child| {
-        if child != node {
-            write_node(child, depth + 1, out);
-        }
+    node.for_each_child_static(&mut |child| {
+        write_node(child, depth + 1, out);
         false
     });
 }

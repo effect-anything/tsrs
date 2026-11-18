@@ -1,14 +1,15 @@
-//! The TypeGPU plugin session.
+//! The `TypeGPU` plugin session.
 //!
-//! The rewrite and the tinyest payload live in `ts_goport::ext`, because
+//! The rewrite and the tinyest payload live in `ts_ext_transform`, because
 //! they use the compiler's parser and tsc calls them from its own parse
 //! hook. This crate is the session a bundler calls when there is no `tsc`:
 //! check rewrites operators, build wraps the rewritten text. It does not
 //! expand Sweetener. `ts_ext_syntax` does that first, then calls
 //! [`TypegpuSession`].
 
-use ts_goport::ext::tsover::{self, Rewrite};
-use ts_goport::ext::typegpu;
+use ts_ext_transform::tsover::{self, Rewrite};
+use ts_ext_transform::typegpu;
+use tsrs_spanmap::Segment;
 
 pub mod structure;
 
@@ -30,7 +31,7 @@ pub struct Diagnostic {
     pub end: u32,
 }
 
-/// One TypeGPU pass over text that is already TypeScript.
+/// One `TypeGPU` pass over text that is already TypeScript.
 #[derive(Clone, Debug)]
 pub struct TypegpuSession {
     phase: Phase,
@@ -49,7 +50,7 @@ pub struct TypegpuSession {
     exclude: Option<String>,
 }
 
-/// Text after one TypeGPU pass.
+/// Text after one `TypeGPU` pass.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transformed {
     pub code: String,
@@ -69,7 +70,7 @@ impl Default for TypegpuSession {
 
 impl TypegpuSession {
     #[must_use]
-    pub fn check() -> Self {
+    pub const fn check() -> Self {
         Self {
             phase: Phase::Check,
             auto_naming: true,
@@ -81,7 +82,7 @@ impl TypegpuSession {
     }
 
     #[must_use]
-    pub fn build() -> Self {
+    pub const fn build() -> Self {
         Self {
             phase: Phase::Build,
             auto_naming: true,
@@ -94,7 +95,7 @@ impl TypegpuSession {
 
     /// [`Self::build`] with upstream's `autoNamingEnabled` set.
     #[must_use]
-    pub fn build_with_auto_naming(auto_naming: bool) -> Self {
+    pub const fn build_with_auto_naming(auto_naming: bool) -> Self {
         Self {
             phase: Phase::Build,
             auto_naming,
@@ -109,7 +110,7 @@ impl TypegpuSession {
     /// compiler emit hook. `false` matches the babel visitor the snapshots
     /// call, and the bun test's `earlyPruning: false`.
     #[must_use]
-    pub fn early_pruning(mut self, enabled: bool) -> Self {
+    pub const fn early_pruning(mut self, enabled: bool) -> Self {
         self.early_pruning = enabled;
         self
     }
@@ -123,7 +124,7 @@ impl TypegpuSession {
 
     /// Apply upstream's default include regex (`/\.m?[jt]sx?(?:\?.*)?$/`).
     #[must_use]
-    pub fn filter_id(mut self, enabled: bool) -> Self {
+    pub const fn filter_id(mut self, enabled: bool) -> Self {
         self.filter_id = enabled;
         self
     }
@@ -169,10 +170,7 @@ pub fn default_include_matches(id: &str) -> bool {
     let Some((_, ext)) = name.rsplit_once('.') else {
         return false;
     };
-    matches!(
-        ext,
-        "ts" | "tsx" | "mts" | "mtsx" | "js" | "jsx" | "mjs" | "mjsx"
-    )
+    matches!(ext, "ts" | "tsx" | "mts" | "mtsx" | "js" | "jsx" | "mjs" | "mjsx")
 }
 
 fn id_selected(path: &str, filter_id: bool, exclude: Option<&str>) -> bool {
@@ -190,50 +188,30 @@ fn build(
     force_tgpu_alias: Option<&str>,
 ) -> Transformed {
     // Operators are rewritten once. `embed_metadata` parses that text and
-    // slices the calls; it does not rewrite a second time. The two parses
-    // each take this thread's one detached store, so the rewrite finishes
-    // and drops its store before the metadata parse starts.
+    // slices the calls; it does not rewrite a second time. Each parse enters
+    // its own scratch arena region and drops it before returning.
     let rewrite = tsover::rewrite_text(path, code);
-    let rewritten = rewrite
-        .as_ref()
-        .map(|item| item.code.clone())
-        .unwrap_or_else(|| code.to_owned());
+    let rewritten = rewrite.as_ref().map_or_else(|| code.to_owned(), |item| item.code.clone());
     let (embedded, unsupported) = typegpu::embed_metadata_with(
         path,
         &rewritten,
-        &typegpu::EmbedFlags {
-            auto_naming,
-            early_pruning,
-            force_tgpu_alias,
-        },
+        &typegpu::EmbedFlags { auto_naming, early_pruning, force_tgpu_alias },
     );
-    let mut diagnostics = rewrite
-        .as_ref()
-        .map(|item| {
-            item.diagnostics
-                .iter()
-                .map(|diag| Diagnostic {
-                    message: diag.message.clone(),
-                    start: diag.start,
-                    end: diag.end,
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let mut diagnostics = rewrite.as_ref().map_or_else(Vec::new, |item| {
+        item.diagnostics
+            .iter()
+            .map(|diag| Diagnostic {
+                message: diag.message.clone(),
+                start: diag.start,
+                end: diag.end,
+            })
+            .collect::<Vec<_>>()
+    });
     diagnostics.extend(unsupported.into_iter().map(|item| {
         let (start, end) = map_rewritten(rewrite.as_ref(), item.start, item.end);
-        Diagnostic {
-            message: item.message,
-            start,
-            end,
-        }
+        Diagnostic { message: item.message, start, end }
     }));
-    Transformed {
-        changed: embedded != code,
-        diagnostics,
-        code: embedded,
-        rewrite: None,
-    }
+    Transformed { changed: embedded != code, diagnostics, code: embedded, rewrite: None }
 }
 
 fn check(path: &str, code: &str) -> Transformed {
@@ -241,37 +219,22 @@ fn check(path: &str, code: &str) -> Transformed {
     // from `Symbol.operatorPlus`. A body that cannot be printed, and a
     // nested directive, are still reported at the author node.
     let mut diagnostics = nesting_diagnostics(path, code);
-    diagnostics.extend(
-        typegpu::refusals(path, code)
-            .into_iter()
-            .map(|item| Diagnostic {
-                message: item.message,
-                start: item.start,
-                end: item.end,
-            }),
-    );
-    Transformed {
-        code: code.to_owned(),
-        diagnostics,
-        changed: false,
-        rewrite: None,
-    }
+    diagnostics.extend(typegpu::refusals(path, code).into_iter().map(|item| Diagnostic {
+        message: item.message,
+        start: item.start,
+        end: item.end,
+    }));
+    Transformed { code: code.to_owned(), diagnostics, changed: false, rewrite: None }
 }
 
 fn nesting_diagnostics(path: &str, code: &str) -> Vec<Diagnostic> {
-    tsover::rewrite_text(path, code)
-        .map(|rewrite| {
-            rewrite
-                .diagnostics
-                .into_iter()
-                .map(|item| Diagnostic {
-                    message: item.message,
-                    start: item.start,
-                    end: item.end,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    tsover::rewrite_text(path, code).map_or_else(Vec::new, |rewrite| {
+        rewrite
+            .diagnostics
+            .into_iter()
+            .map(|item| Diagnostic { message: item.message, start: item.start, end: item.end })
+            .collect()
+    })
 }
 
 fn map_rewritten(rewrite: Option<&tsover::Rewrite>, start: u32, end: u32) -> (u32, u32) {
@@ -280,21 +243,18 @@ fn map_rewritten(rewrite: Option<&tsover::Rewrite>, start: u32, end: u32) -> (u3
     };
     (
         map_offset(&rewrite.segments, start).unwrap_or(start),
-        map_offset(&rewrite.segments, end.saturating_sub(1))
-            .map(|at| at.saturating_add(1))
-            .unwrap_or(end),
+        map_offset(&rewrite.segments, end.saturating_sub(1)).map_or(end, |at| at.saturating_add(1)),
     )
 }
 
-fn map_offset(segments: &[ts_goport::spanmap::Segment], at: u32) -> Option<u32> {
-    let at = i32::try_from(at).unwrap_or(i32::MAX);
+fn map_offset(segments: &[Segment], at: u32) -> Option<u32> {
     for segment in segments {
         if at < segment.virtual_start || at >= segment.virtual_end {
             continue;
         }
         let delta = at - segment.virtual_start;
         let original = segment.original_start.saturating_add(delta);
-        return Some(u32::try_from(original.min(segment.original_end).max(0)).unwrap_or(0));
+        return Some(original.min(segment.original_end));
     }
     None
 }

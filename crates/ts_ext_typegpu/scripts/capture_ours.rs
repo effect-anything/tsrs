@@ -1,4 +1,4 @@
-//! Write `ours.ts` for each captured TypeGPU case. Does not overwrite
+//! Write `ours.ts` for each captured `TypeGPU` case. Does not overwrite
 //! `theirs.ts`. Sweetener cases are not in this tree.
 //!
 //! Compare every case named in `cases.jsonl`. It does not discover cases.
@@ -110,16 +110,8 @@ fn compare(dir: &Path, ours: &str, theirs: &Path) -> Result<Same, String> {
         && reference.contains(": () =>")
         && !reference.contains("function")
         && !reference.contains("__TYPEGPU_META__");
-    let left = if externals_only {
-        reference.trim().to_owned()
-    } else {
-        reference
-    };
-    let right = if externals_only {
-        externals_object(ours).to_owned()
-    } else {
-        ours.to_owned()
-    };
+    let left = if externals_only { reference.trim().to_owned() } else { reference };
+    let right = if externals_only { externals_object(ours).to_owned() } else { ours.to_owned() };
     if left == right {
         return Ok(Same::Bytes);
     }
@@ -128,10 +120,7 @@ fn compare(dir: &Path, ours: &str, theirs: &Path) -> Result<Same, String> {
     {
         return Ok(Same::Shape);
     }
-    let text = match (
-        structure::dump(&left, false),
-        structure::dump(&right, false),
-    ) {
+    let text = match (structure::dump(&left, false), structure::dump(&right, false)) {
         (Some(theirs_tree), Some(ours_tree)) => structure::unified(&theirs_tree, &ours_tree),
         _ => "one side does not parse\n".to_owned(),
     };
@@ -154,7 +143,7 @@ fn externals_object(text: &str) -> &str {
             '}' => {
                 depth -= 1;
                 if depth == 0 {
-                    return &text[start..start + index + 1];
+                    return &text[start..=(start + index)];
                 }
             }
             _ => {}

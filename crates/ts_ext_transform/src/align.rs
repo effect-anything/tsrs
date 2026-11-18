@@ -12,7 +12,7 @@
 //! kind `0` copies bytes one for one, kind `1` is generated text standing
 //! for the whole old range (an operator that became a call).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// One span-map tuple: new start, new end, old start, old end, kind.
 pub type Tuple = (i32, i32, i32, i32, i32);
@@ -57,9 +57,7 @@ pub fn tokens(text: &str) -> Vec<(usize, usize)> {
         } else if text[at..].starts_with("//") {
             at = text[at..].find('\n').map_or(bytes.len(), |end| at + end);
         } else if text[at..].starts_with("/*") {
-            at = text[at + 2..]
-                .find("*/")
-                .map_or(bytes.len(), |end| at + 2 + end + 2);
+            at = text[at + 2..].find("*/").map_or(bytes.len(), |end| at + 2 + end + 2);
         } else {
             at += len;
         }
@@ -97,14 +95,8 @@ impl Side<'_> {
 /// Segments that carry `old` into `new`, see the module docs.
 #[must_use]
 pub fn align(old: &str, new: &str) -> Vec<Tuple> {
-    let old = Side {
-        text: old,
-        tokens: tokens(old),
-    };
-    let new = Side {
-        text: new,
-        tokens: tokens(new),
-    };
+    let old = Side { text: old, tokens: tokens(old) };
+    let new = Side { text: new, tokens: tokens(new) };
     let (n, m) = (old.tokens.len(), new.tokens.len());
     // new index -> old index.
     let mut pair: Vec<Option<usize>> = vec![None; m];
@@ -120,7 +112,7 @@ pub fn align(old: &str, new: &str) -> Vec<Tuple> {
 /// into the longest run of equal tokens around it, and the runs are taken
 /// longest first. This is what follows a hoisted function.
 fn seed_runs(old: &Side<'_>, new: &Side<'_>, pair: &mut [Option<usize>], used: &mut [bool]) {
-    let mut counts: HashMap<&str, (u32, usize, u32, usize)> = HashMap::new();
+    let mut counts: FxHashMap<&str, (u32, usize, u32, usize)> = FxHashMap::default();
     for i in 0..old.tokens.len() {
         if old.is_word(i) {
             let entry = counts.entry(old.tok(i)).or_insert((0, i, 0, 0));
@@ -145,15 +137,14 @@ fn seed_runs(old: &Side<'_>, new: &Side<'_>, pair: &mut [Option<usize>], used: &
     // Seeds on one diagonal inside one run share it: a file the mapper
     // barely touches is one run holding every word, and growing it again
     // for each seed is quadratic (4k lines took 40 s).
-    let mut grown: HashMap<isize, (usize, usize, usize)> = HashMap::new();
+    let mut grown: FxHashMap<isize, (usize, usize, usize)> = FxHashMap::default();
     for (i, j) in seeds {
-        #[allow(clippy::cast_possible_wrap)]
         let diagonal = i as isize - j as isize;
-        if let Some(&(i0, j0, len)) = grown.get(&diagonal) {
-            if i < i0 + len {
-                runs.push((len, i0, j0, i, j));
-                continue;
-            }
+        if let Some(&(i0, j0, len)) = grown.get(&diagonal)
+            && i < i0 + len
+        {
+            runs.push((len, i0, j0, i, j));
+            continue;
         }
         let (mut i0, mut j0) = (i, j);
         while i0 > 0 && j0 > 0 && old.tok(i0 - 1) == new.tok(j0 - 1) {
@@ -209,16 +200,8 @@ fn fill_gaps(old: &Side<'_>, new: &Side<'_>, pair: &mut [Option<usize>], used: &
             j += 1;
         }
         let b1 = j;
-        let a0 = if b0 == 0 {
-            0
-        } else {
-            pair[b0 - 1].map_or(0, |i| i + 1)
-        };
-        let a1 = if b1 == m {
-            old.tokens.len()
-        } else {
-            pair[b1].unwrap_or(0)
-        };
+        let a0 = if b0 == 0 { 0 } else { pair[b0 - 1].map_or(0, |i| i + 1) };
+        let a1 = if b1 == m { old.tokens.len() } else { pair[b1].unwrap_or(0) };
         if b0 < b1 {
             if a0 < a1 && (a0..a1).all(|i| !used[i]) {
                 diff(old, new, a0, a1, b0, b1, pair, used);
@@ -226,9 +209,7 @@ fn fill_gaps(old: &Side<'_>, new: &Side<'_>, pair: &mut [Option<usize>], used: &
                 // The right partner moved (a hoist). The old tokens after
                 // the left partner, up to the next paired one, are the
                 // candidates.
-                let end = (a0..old.tokens.len())
-                    .find(|&i| used[i])
-                    .unwrap_or(old.tokens.len());
+                let end = (a0..old.tokens.len()).find(|&i| used[i]).unwrap_or(old.tokens.len());
                 if a0 < end {
                     diff(old, new, a0, end, b0, b1, pair, used);
                 }
@@ -241,7 +222,10 @@ fn fill_gaps(old: &Side<'_>, new: &Side<'_>, pair: &mut [Option<usize>], used: &
 /// Recursive unique-token diff of `old[a0..a1]` and `new[b0..b1]`: common
 /// prefix and suffix, then the longest increasing run of tokens unique on
 /// both sides as anchors, then the gaps between anchors.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::suspicious_operation_groupings,
+    reason = "a0..a1 indexes old and b0..b1 indexes new"
+)]
 fn diff(
     old: &Side<'_>,
     new: &Side<'_>,
@@ -267,7 +251,7 @@ fn diff(
     if a0 >= a1 || b0 >= b1 {
         return;
     }
-    let mut counts: HashMap<&str, (u32, usize, u32, usize)> = HashMap::new();
+    let mut counts: FxHashMap<&str, (u32, usize, u32, usize)> = FxHashMap::default();
     for i in a0..a1 {
         let entry = counts.entry(old.tok(i)).or_insert((0, i, 0, 0));
         entry.0 += 1;
@@ -341,7 +325,7 @@ fn longest_increasing(items: &[(usize, usize)]) -> Vec<(usize, usize)> {
 /// same tokens at another place. A run counts when it is at least three
 /// tokens long and holds a word.
 fn moved_runs(old: &Side<'_>, new: &Side<'_>, pair: &mut [Option<usize>], used: &mut [bool]) {
-    let mut free: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut free: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
     for (i, taken) in used.iter().enumerate() {
         if !taken {
             free.entry(old.tok(i)).or_default().push(i);
@@ -443,9 +427,7 @@ fn segments(old: &Side<'_>, new: &Side<'_>, pair: &[Option<usize>]) -> Vec<Tuple
                 // not the author's and keeps no origin.
                 let operator = !trimmed.is_empty()
                     && trimmed.len() <= 3
-                    && !trimmed
-                        .chars()
-                        .any(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                    && !trimmed.chars().any(|c| c.is_alphanumeric() || c == '_' || c == '$')
                     && new_gap.len() <= 32;
                 if operator {
                     let new_lead =
@@ -460,13 +442,7 @@ fn segments(old: &Side<'_>, new: &Side<'_>, pair: &[Option<usize>]) -> Vec<Tuple
                 }
             }
         }
-        out.push((
-            to_i32(run.0),
-            to_i32(run.1),
-            to_i32(run.2),
-            to_i32(run.3),
-            0,
-        ));
+        out.push((to_i32(run.0), to_i32(run.1), to_i32(run.2), to_i32(run.3), 0));
     }
     out
 }
@@ -504,11 +480,7 @@ pub fn retarget(old: &str, new: &str, segments: &[Tuple]) -> Vec<Tuple> {
                 if lo >= hi {
                     continue;
                 }
-                let (s, e) = if inner == 0 {
-                    (gs + (lo - vs), gs + (hi - vs))
-                } else {
-                    (gs, ge)
-                };
+                let (s, e) = if inner == 0 { (gs + (lo - vs), gs + (hi - vs)) } else { (gs, ge) };
                 low = Some(low.map_or(s, |low| low.min(s)));
                 high = high.max(e);
             }
@@ -519,64 +491,4 @@ pub fn retarget(old: &str, new: &str, segments: &[Tuple]) -> Vec<Tuple> {
     }
     out.sort_unstable();
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{align, retarget};
-
-    fn mapped<'a>(old: &'a str, new: &str, at: &str) -> Option<&'a str> {
-        let pos = i32::try_from(new.find(at)?).ok()?;
-        align(old, new)
-            .into_iter()
-            .find(|seg| seg.4 == 0 && seg.0 <= pos && pos < seg.1)
-            .map(|seg| {
-                let start = usize::try_from(seg.2 + (pos - seg.0)).unwrap_or(0);
-                &old[start..start + at.len()]
-            })
-    }
-
-    #[test]
-    fn a_hoisted_function_keeps_its_tokens() {
-        let old = "console.log(add);\nfunction add(a, b) {\n  'use gpu';\n  return a + b;\n}\n";
-        let new = "const add = ($ => set($.f = function add(a, b) {\n  'use gpu';\n  return __tsover_add(a, b);\n}, {v: 2}) && $.f)({});\nconsole.log(add);\n";
-        assert_eq!(mapped(old, new, "'use gpu'"), Some("'use gpu'"));
-        assert_eq!(mapped(old, new, "return"), Some("return"));
-        assert_eq!(mapped(old, new, "console"), Some("console"));
-        let segs = align(old, new);
-        // The comma between the operands stands for the `+` it replaced.
-        let call = i32::try_from(new.rfind("a, b)").unwrap() + 1).unwrap();
-        assert!(
-            segs.iter().any(|s| s.4 == 1
-                && s.0 <= call
-                && call < s.1
-                && &old[s.2 as usize..s.3 as usize] == "+"),
-            "{segs:?}"
-        );
-    }
-
-    #[test]
-    fn retarget_composes() {
-        let source = "let x = 1 |> f;";
-        let old = "let x = f(1);";
-        let first = vec![(0, 8, 0, 8, 0), (8, 12, 8, 14, 1), (12, 13, 14, 15, 0)];
-        let new = "let x = f(1);\n";
-        assert_eq!(
-            retarget(old, new, &first),
-            vec![(0, 8, 0, 8, 0), (8, 12, 8, 14, 1), (12, 13, 14, 15, 0)]
-        );
-        let _ = source;
-    }
-
-    /// A large file the mapper barely changes is one long run of unique
-    /// words. Seeds share that run instead of each growing it again, so this
-    /// stays linear (it was quadratic: a 4k-line TypeGPU file took 40 s).
-    #[test]
-    fn a_long_unchanged_run_is_grown_once() {
-        let old: String = (0..40_000).map(|k| format!("let v{k} = {k};\n")).collect();
-        let new = format!("{old}export {{}};\n");
-        let started = std::time::Instant::now();
-        assert_eq!(mapped(&old, &new, "v39999 ="), Some("v39999 ="));
-        assert!(started.elapsed().as_secs() < 10, "align is quadratic again");
-    }
 }

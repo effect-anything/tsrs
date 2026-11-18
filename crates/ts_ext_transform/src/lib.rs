@@ -4,3 +4,5 @@ pub mod align;
 pub mod precheck;
 pub mod tsover;
 pub mod typegpu;
+
+pub use precheck::MAPPER_NAME;
