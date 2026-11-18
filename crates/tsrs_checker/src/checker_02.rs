@@ -133,6 +133,7 @@ impl Checker {
         self.ctx = Some(ctx.clone());
         let links = self.source_file_links.get(source_file);
         if !links.type_checked.get() {
+            links.relation_errors.borrow_mut().clear();
             // tsrs-only: TSRS_TRACE_UNION_REDUCTION (uniontrace.rs) prints each checker's file order.
             if crate::uniontrace::enabled() {
                 crate::uniontrace::report_check_file(self, source_file, None);

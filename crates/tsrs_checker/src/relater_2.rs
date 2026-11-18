@@ -4576,6 +4576,15 @@ impl Relater {
         source: P<Type>,
         target: P<Type>,
     ) {
+        if let Some(error_node) = self.error_node.get()
+            && let Some(source_file) = ast::get_source_file_of_node(error_node)
+        {
+            c.source_file_links.get(source_file).relation_errors.borrow_mut().push(RelationError {
+                source,
+                target,
+                error_node,
+            });
+        }
         let (source_type, target_type) = c.get_type_names_for_error_display(source, target);
         let mut generalized_source = source;
         let mut generalized_source_type = source_type.clone();

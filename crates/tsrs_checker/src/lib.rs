@@ -138,6 +138,7 @@ pub mod checker_14;
 pub(crate) use checker_14::*;
 pub mod checker_15;
 pub(crate) use checker_15::*;
+mod effect_stability_context;
 pub mod relater_1;
 pub(crate) use relater_1::*;
 pub(crate) mod flow;
@@ -183,8 +184,8 @@ pub use checker_09::is_non_deferred_type_reference;
 pub use checker_14::get_mapped_type_modifiers;
 pub use exports::{
     get_declaration_modifier_flags_from_symbol_exported, get_property_name_from_type_exported,
-    is_distributed_type_parameter, is_tuple_type_exported, is_tuple_type_target,
-    is_type_usable_as_property_name_exported,
+    is_distributed_type_parameter, is_private_identifier_symbol_exported, is_tuple_type_exported,
+    is_tuple_type_target, is_type_usable_as_property_name_exported,
 };
 pub use nodebuilder::{new_node_builder, new_node_builder_ex};
 pub use nodebuilderimpl_1::try_get_module_specifier_from_declaration;

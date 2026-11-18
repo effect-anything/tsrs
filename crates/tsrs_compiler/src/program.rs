@@ -261,6 +261,7 @@ pub struct Program {
     // tsrs-only: the address of the program `reuse_program` made this one from, 0 for a program built in full
     // (`is_reuse_of`). An address, not a reference: the watch frees that program once this one has replaced it.
     reused_from: usize,
+    effect_state: OnceLock<ts_ext_effect::ProgramEffectState>,
     // tsrs-only: what `reuse_program` allocated for this program when its programs are freed (`checker_regions`):
     // the file list and the resolution data with its copy of the package.json cache table, about 40 KB per edit on a
     // 4k-file project. Last: the fields above point into it.
@@ -570,6 +571,7 @@ pub fn new_program(opts: ProgramOptions) -> &'static Program {
         reuse_synthetic_imports: opts.reuse_synthetic_imports,
         replaced_synthetic_imports: FxHashMap::default(),
         reused_from: 0,
+        effect_state: OnceLock::new(),
         own_region: None,
     };
     // Go initializes the checker pool before verifying options; the pool factory takes the program by
@@ -852,6 +854,7 @@ impl Program {
             reuse_synthetic_imports: self.reuse_synthetic_imports,
             replaced_synthetic_imports,
             reused_from: std::ptr::from_ref(self) as usize,
+            effect_state: OnceLock::new(),
             own_region,
         };
         try_reuse(&result.unresolved_imports, &self.unresolved_imports);
@@ -1075,9 +1078,15 @@ impl Program {
         &self.host
     }
 
+    fn effect_state(&self) -> &ts_ext_effect::ProgramEffectState {
+        self.effect_state.get_or_init(|| ts_ext_effect::ProgramEffectState::new(self))
+    }
+
     // program.go:540
     pub fn get_config_file_parsing_diagnostics(&self) -> Vec<P<Diagnostic>> {
-        self.opts.config.get_config_file_parsing_diagnostics()
+        let mut diags = self.opts.config.get_config_file_parsing_diagnostics();
+        diags.extend(self.effect_state().config_diagnostics());
+        diags
     }
 
     // program.go:546
@@ -1451,12 +1460,14 @@ impl Program {
             // All files: the type-check pass, the one that may move files between checkers.
             None => {
                 // tsrs-only: the CLI's `--noEmit` check frees a leaf's tree and binder output once its diagnostics are
-                // collected (fileregions.rs).
-                let free_leaves = tsrs_core::phases::time(
-                    self.options().diagnostics_enabled(),
-                    "Checkers: leaf files",
-                    || crate::fileregions::classify(self),
-                );
+                // collected (fileregions.rs). Disabled when Effect rules are active so cross-file package/barrel/symbol
+                // inspections can safely read all program files concurrently.
+                let free_leaves = !self.effect_state().has_plugin()
+                    && tsrs_core::phases::time(
+                        self.options().diagnostics_enabled(),
+                        "Checkers: leaf files",
+                        || crate::fileregions::classify(self),
+                    );
                 let collect = |ctx: &Context, c: &mut Checker, file: P<SourceFile>| {
                     let diagnostics = collect(ctx, c, file);
                     if free_leaves && file.is_check_leaf() {
@@ -2734,6 +2745,9 @@ impl Program {
         if is_check_js {
             diags.extend_from_slice(source_file.jsdoc_diagnostics());
         }
+        if !file_checker.was_canceled() {
+            diags.extend(self.effect_state().check_file(self, file_checker, source_file));
+        }
 
         let (mut filtered, directives_by_line) =
             Self::get_diagnostics_with_preceding_directives(source_file, diags);
@@ -3968,5 +3982,23 @@ impl tsoptions::outputpaths::OutputPathsHost for Program {
 
     fn use_case_sensitive_file_names(&self) -> bool {
         Program::use_case_sensitive_file_names(self)
+    }
+}
+
+impl ts_ext_effect::EffectProgramHost for Program {
+    fn fs(&self) -> &dyn tsrs_vfs::FS {
+        self.host.fs()
+    }
+
+    fn command_line(&self) -> P<ParsedCommandLine> {
+        Program::command_line(self)
+    }
+
+    fn is_source_file_from_external_library(&self, file: P<SourceFile>) -> bool {
+        Program::is_source_file_from_external_library(self, file)
+    }
+
+    fn get_nearest_ancestor_directory_with_package_json(&self, directory: &str) -> String {
+        Program::get_nearest_ancestor_directory_with_package_json(self, directory)
     }
 }

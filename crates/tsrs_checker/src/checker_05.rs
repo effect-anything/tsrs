@@ -1331,7 +1331,7 @@ impl Checker {
 
     // Returns the `this` argument node in calls like `x.f(...)` and `x[f](...)`. `nil` otherwise.
     // checker.go:9537
-    fn get_this_argument_of_call(&self, node: P<Node>) -> Option<P<Node>> {
+    pub(crate) fn get_this_argument_of_call(&self, node: P<Node>) -> Option<P<Node>> {
         if is_binary_expression(node) {
             return Some(node.as_binary_expression().right());
         }
@@ -1353,7 +1353,7 @@ impl Checker {
     }
 
     // checker.go:9559
-    fn get_this_argument_type(&mut self, node: Option<P<Node>>) -> P<Type> {
+    pub(crate) fn get_this_argument_type(&mut self, node: Option<P<Node>>) -> P<Type> {
         let Some(node) = node else {
             return self.void_type;
         };

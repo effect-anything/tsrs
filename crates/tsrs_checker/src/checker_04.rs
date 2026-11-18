@@ -2036,6 +2036,9 @@ impl Checker {
             self.check_const_enum_access(node, t);
         }
         self.current_node = save_current_node;
+        if self.checking_file.is_some() && (check_mode & !CheckMode::Contextual).is_empty() {
+            self.checked_expression_types.insert(node, t);
+        }
         self.end_instantiation_count();
         t
     }

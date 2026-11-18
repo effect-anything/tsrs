@@ -255,6 +255,55 @@ EOF
     diff -rq "$out/emit-direct" "$out/emit-$w" > /dev/null 2>&1
     check "$w emitted files match direct" $?
   done
+
+  mkdir -p "$nm/effect" "$proj/effect-src"
+  cat > "$nm/effect/package.json" <<'EOF'
+{ "name": "effect", "version": "3.19.0", "types": "./index.d.ts" }
+EOF
+  cat > "$nm/effect/index.d.ts" <<'EOF'
+export declare const EffectTypeId: unique symbol;
+export interface Variance<out A, out E, out R> {
+  readonly _A: () => A;
+  readonly _E: () => E;
+  readonly _R: () => R;
+}
+export interface Effect<out A, out E = never, out R = never> {
+  readonly [EffectTypeId]: Variance<A, E, R>;
+}
+export declare namespace Effect {
+  export function succeed<A>(value: A): Effect<A>;
+}
+EOF
+  cat > "$proj/effect-src/check.sts" <<'EOF'
+import { Effect } from "effect";
+syntax makeFloating:expr {
+  rule { makeFloating() } => { Effect.succeed(1) }
+}
+makeFloating();
+// @effect-diagnostics-next-line floatingEffect:off
+makeFloating();
+EOF
+  cat > "$proj/tsconfig.effect.json" <<'EOF'
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "plugins": [{ "name": "@effect/language-service" }]
+  },
+  "contentMappers": [
+    { "package": "@effect-x/tsc", "extensions": [".sts", ".stsx"] }
+  ],
+  "include": ["effect-src"]
+}
+EOF
+  effect_out=$(cd "$proj" && "$nm/.bin/$bin" --runExternalCode -p tsconfig.effect.json --pretty false 2>&1)
+  effect_rc=$?
+  [[ $effect_rc != 0 ]] && grep -q "effect-src/check.sts(5,1): error TS377001:" <<< "$effect_out" && ! grep -q "effect-src/check.sts(7," <<< "$effect_out"
+  check "@effect/language-service plugin reports TS377001 on .sts and honors @effect-diagnostics directive" $? "$effect_out"
 fi
 
 # Moving the project directory keeps relative paths working.

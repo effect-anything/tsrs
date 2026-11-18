@@ -1154,6 +1154,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
+name = "ts_ext_effect"
+version = "0.25.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ts_ext_syntax",
+ "tsrs_ast",
+ "tsrs_checker",
+ "tsrs_compiler",
+ "tsrs_contentmapper",
+ "tsrs_core",
+ "tsrs_diagnostics",
+ "tsrs_parser",
+ "tsrs_scanner",
+ "tsrs_spanmap",
+ "tsrs_tsoptions",
+ "tsrs_vfs",
+]
+
+[[package]]
 name = "ts_ext_sweetener"
 version = "0.25.0"
 dependencies = [
@@ -1369,6 +1389,7 @@ version = "7.1.0-beta.tsrs2"
 dependencies = [
  "rayon",
  "rustc-hash",
+ "ts_ext_effect",
  "ts_ext_transform",
  "tsrs_ast",
  "tsrs_binder",

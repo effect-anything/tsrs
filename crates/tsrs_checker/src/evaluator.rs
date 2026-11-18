@@ -6,11 +6,11 @@ use crate::*;
 pub struct Result {
     pub value: Option<LiteralValue>,
     pub is_syntactically_string: bool,
-    pub(crate) resolved_other_files: bool,
+    pub resolved_other_files: bool,
     pub has_external_references: bool,
 }
 
-pub(crate) fn new_result(
+pub fn new_result(
     value: Option<LiteralValue>,
     is_syntactically_string: bool,
     resolved_other_files: bool,
@@ -20,11 +20,11 @@ pub(crate) fn new_result(
 }
 
 /// Go `type Evaluator func(expr *ast.Node, location *ast.Node) Result`, with the host passed back.
-pub(crate) type Evaluator<H> = fn(&mut H, P<Node>, P<Node>) -> Result;
+pub type Evaluator<H> = fn(&mut H, P<Node>, P<Node>) -> Result;
 
 /// Go `NewEvaluator(evaluateEntity, outerExpressionsToSkip)(expr, location)`: the evaluator closure body, with its
 /// captured values passed explicitly.
-pub(crate) fn evaluate<H>(
+pub fn evaluate<H>(
     host: &mut H,
     evaluate_entity: Evaluator<H>,
     outer_expressions_to_skip: ast::OuterExpressionKinds,

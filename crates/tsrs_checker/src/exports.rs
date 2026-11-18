@@ -2,6 +2,152 @@ use crate::*;
 use tsrs_ast as ast;
 
 impl Checker {
+    pub fn get_base_types_of_reference_exported(&mut self, t: P<Type>) -> Vec<P<Type>> {
+        if !t.object_flags().intersects(ObjectFlags::Reference) {
+            return self.get_base_types(t).to_vec();
+        }
+        let Some(target) = t.target() else {
+            return Vec::new();
+        };
+        if !target.object_flags().intersects(ObjectFlags::ClassOrInterface) {
+            return self.get_base_types(target).to_vec();
+        }
+        let bases = self.get_base_types(target);
+        let type_parameters = target.as_interface_type().type_parameters();
+        let type_arguments = self.get_type_arguments(t);
+        let mapper = (!type_parameters.is_empty()).then(|| {
+            new_type_mapper(type_parameters, alloc_slice(&type_arguments[..type_parameters.len()]))
+        });
+        let this_argument = if type_arguments.len() > type_parameters.len() {
+            type_arguments.last().copied()
+        } else {
+            None
+        };
+        bases
+            .iter()
+            .map(|&base| {
+                let instantiated = self.instantiate_type(base, mapper);
+                if this_argument.is_some() {
+                    self.get_type_with_this_argument(instantiated, this_argument, false)
+                } else {
+                    instantiated
+                }
+            })
+            .collect()
+    }
+
+    pub fn is_past_last_assignment_exported(&mut self, symbol: P<Symbol>, node: P<Node>) -> bool {
+        self.is_past_last_assignment(symbol, Some(node))
+    }
+
+    pub fn check_expression_with_contextual_type_exported(
+        &mut self,
+        node: P<Node>,
+        contextual_type: P<Type>,
+        inference_context: Option<P<InferenceContext>>,
+        check_mode: CheckMode,
+    ) -> P<Type> {
+        self.check_expression_with_contextual_type(
+            node,
+            contextual_type,
+            inference_context,
+            check_mode,
+        )
+    }
+
+    pub fn new_function_type_exported(
+        &mut self,
+        type_parameters: &[P<Type>],
+        this_parameter: Option<P<Symbol>>,
+        parameters: &[P<Symbol>],
+        return_type: P<Type>,
+    ) -> P<Type> {
+        self.new_function_type(type_parameters, this_parameter, parameters, return_type)
+    }
+
+    pub fn is_symbol_assigned_exported(&mut self, symbol: P<Symbol>) -> bool {
+        self.is_symbol_assigned(symbol)
+    }
+
+    pub fn evaluate_entity_exported(
+        &mut self,
+        expr: P<Node>,
+        location: Option<P<Node>>,
+    ) -> evaluator::Result {
+        self.evaluate_entity(expr, location)
+    }
+
+    pub fn is_constant_variable_exported(&mut self, symbol: P<Symbol>) -> bool {
+        self.is_constant_variable(symbol)
+    }
+
+    pub fn is_block_scoped_name_declared_before_use_exported(
+        &mut self,
+        declaration: P<Node>,
+        usage: P<Node>,
+    ) -> bool {
+        self.is_block_scoped_name_declared_before_use(declaration, usage)
+    }
+
+    /// Returns the relation failures recorded by the checker while checking this file.
+    pub fn get_relation_errors(&mut self, source_file: P<SourceFile>) -> Vec<RelationError> {
+        if !self.source_file_links.get(source_file).type_checked.get() {
+            let ctx = self.ctx.clone().unwrap_or_else(tsrs_core::context::Context::background);
+            self.get_diagnostics_exported(&ctx, source_file);
+        }
+        self.source_file_links.get(source_file).relation_errors.borrow().clone()
+    }
+
+    /// Reads a final expression type from a completed file check without evaluating the expression.
+    pub fn get_checked_type_of_expression(&mut self, mut node: P<Node>) -> Option<P<Type>> {
+        if !ast::is_expression_node(node) || ast::is_part_of_type_node(node) {
+            return None;
+        }
+        if ast::is_right_side_of_qualified_name_or_property_access(node) {
+            node = node.parent()?;
+        }
+        let source_file = ast::get_source_file_of_node(node)?;
+        if !self.source_file_links.try_get(source_file)?.type_checked.get() {
+            return None;
+        }
+        let t = self.checked_expression_types.get(&node).copied().or_else(|| {
+            let links = self.type_node_links.try_get(node)?;
+            links.resolved_type.get()
+        })?;
+        Some(self.get_regular_type_of_literal_type(t))
+    }
+
+    /// Caches the ordinary contextual-type query for an object literal, including an absent result.
+    pub fn get_cached_object_literal_contextual_type(&mut self, node: P<Node>) -> Option<P<Type>> {
+        if !ast::is_object_literal_expression(node) {
+            return None;
+        }
+        if let Some(t) = self.object_literal_contextual_types.get(&node) {
+            return *t;
+        }
+        let t = self.get_contextual_type(node, ContextFlags::None);
+        self.object_literal_contextual_types.insert(node, t);
+        t
+    }
+
+    pub fn get_type_arguments_for_resolved_signature(&mut self, sig: P<Signature>) -> Vec<P<Type>> {
+        let Some(mapper) = sig.mapper.get() else {
+            return Vec::new();
+        };
+        let type_parameters = sig.target().unwrap_or(sig).type_parameters();
+        self.instantiate_types(type_parameters, Some(mapper))
+    }
+
+    pub fn has_resolved_value_symbol_type_exported(&self, symbol: P<Symbol>) -> bool {
+        self.value_symbol_links
+            .try_get_if_id_assigned(symbol)
+            .is_some_and(|links| links.resolved_type.get().is_some())
+    }
+
+    pub fn is_source_file_type_checked_exported(&self, file: P<SourceFile>) -> bool {
+        self.source_file_links.try_get(file).is_some_and(|links| links.type_checked.get())
+    }
+
     // exports.go:8
     pub fn get_string_type(&self) -> P<Type> {
         self.string_type
@@ -587,4 +733,63 @@ impl Checker {
 // exports.go:410
 pub fn is_distributed_type_parameter(t: P<Type>) -> bool {
     t.flags().intersects(TypeFlags::TypeParameter) && t.as_type_parameter().is_distributed.get()
+}
+
+pub fn is_private_identifier_symbol_exported(symbol: Option<P<Symbol>>) -> bool {
+    is_private_identifier_symbol(symbol)
+}
+
+impl Type {
+    #[inline]
+    pub fn has_mapper_exported(&self) -> bool {
+        self.mapper().is_some()
+    }
+}
+
+impl TypeParameter {
+    #[inline]
+    pub fn cached_constraint_exported(&self) -> Option<P<Type>> {
+        self.constraint.get()
+    }
+
+    #[inline]
+    pub fn cached_default_type_exported(&self) -> Option<P<Type>> {
+        self.resolved_default_type.get()
+    }
+
+    #[inline]
+    pub fn is_distributed_exported(&self) -> bool {
+        self.is_distributed.get()
+    }
+}
+
+impl ConditionalType {
+    #[inline]
+    pub fn root_node_exported(&self) -> Option<P<Node>> {
+        self.root.get()?.node.get()
+    }
+
+    #[inline]
+    pub fn cached_true_type_exported(&self) -> Option<P<Type>> {
+        self.resolved_true_type.get()
+    }
+
+    #[inline]
+    pub fn cached_false_type_exported(&self) -> Option<P<Type>> {
+        self.resolved_false_type.get()
+    }
+}
+
+impl MappedType {
+    #[inline]
+    pub fn declaration_exported(&self) -> Option<P<Node>> {
+        self.declaration.get()
+    }
+}
+
+impl TypeReference {
+    #[inline]
+    pub fn cached_type_arguments_exported(&self) -> Option<&'static [P<Type>]> {
+        self.resolved_type_arguments.get()
+    }
 }

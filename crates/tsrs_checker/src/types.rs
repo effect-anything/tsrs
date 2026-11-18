@@ -779,6 +779,13 @@ pub struct AssertionLinks {
 
 // SourceFile links
 
+#[derive(Clone, Copy, Debug)]
+pub struct RelationError {
+    pub source: P<Type>,
+    pub target: P<Type>,
+    pub error_node: P<Node>,
+}
+
 #[derive(Default)]
 pub struct SourceFileLinks {
     pub(crate) type_checked: Cell<bool>,
@@ -792,6 +799,7 @@ pub struct SourceFileLinks {
     pub(crate) local_jsx_factory: Cell<Option<P<Node>>>,
     pub(crate) local_jsx_fragment_factory: Cell<Option<P<Node>>>,
     pub(crate) jsx_fragment_type: Cell<Option<P<Type>>>,
+    pub(crate) relation_errors: RefCell<Vec<RelationError>>,
 }
 
 // Signature specific links
@@ -3439,6 +3447,9 @@ impl crate::links::LinkCopy for SourceFileLinks {
             self.identifier_check_nodes
                 .borrow_mut()
                 .clone_from(frozen.identifier_check_nodes.try_borrow_unguarded().unwrap());
+            self.relation_errors
+                .borrow_mut()
+                .clone_from(frozen.relation_errors.try_borrow_unguarded().unwrap());
         }
         self.local_jsx_namespace.set(frozen.local_jsx_namespace.get());
         self.local_jsx_fragment_namespace.set(frozen.local_jsx_fragment_namespace.get());

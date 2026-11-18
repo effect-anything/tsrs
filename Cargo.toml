@@ -115,6 +115,7 @@ ts_ext_transform = { path = "crates/ts_ext_transform" }
 ts_ext_sweetener = { path = "crates/ts_ext_sweetener" }
 ts_ext_typegpu = { path = "crates/ts_ext_typegpu" }
 ts_ext_syntax = { path = "crates/ts_ext_syntax" }
+ts_ext_effect = { path = "crates/ts_ext_effect" }
 napi = { version = "3", default-features = false, features = ["napi4"] }
 napi-derive = "3"
 napi-build = "2"

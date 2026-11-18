@@ -710,7 +710,7 @@ impl Checker {
 
     // Creates a synthetic `FunctionType`
     // checker.go:30993
-    fn new_function_type(
+    pub(crate) fn new_function_type(
         &mut self,
         type_parameters: &[P<Type>],
         this_parameter: Option<P<Symbol>>,
