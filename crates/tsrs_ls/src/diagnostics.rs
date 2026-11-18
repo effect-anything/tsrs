@@ -94,6 +94,7 @@ impl LanguageService {
             OrderedMap::default();
         for diag_slice in diagnostics {
             for &diag in *diag_slice {
+                let diag = crate::ext_ls::with_expansion_context(diag);
                 if is_synthesized_content_mapped_diagnostic(diag) {
                     synthesized_by_file.entry(diag.file().unwrap()).or_default().push(diag);
                     continue;
@@ -123,7 +124,7 @@ impl LanguageService {
 // file whose location lies entirely in synthesized virtual code with no counterpart in the original
 // file, and so has no meaningful position to report against the original file.
 // diagnostics.go:84
-fn is_synthesized_content_mapped_diagnostic(diag: P<Diagnostic>) -> bool {
+pub fn is_synthesized_content_mapped_diagnostic(diag: P<Diagnostic>) -> bool {
     let Some(file) = diag.file() else {
         return false;
     };
@@ -135,7 +136,7 @@ fn is_synthesized_content_mapped_diagnostic(diag: P<Diagnostic>) -> bool {
     }
     let Some(loc) = diag.loc() else { return false };
     let (_, fidelity) = span_map.virtual_to_original_span(loc);
-    fidelity == Fidelity::None
+    fidelity == Fidelity::None && !crate::ext_ls::inside(span_map, loc)
 }
 
 // aggregateSynthesizedDiagnostics builds a single diagnostic at the top of a content-mapped file standing

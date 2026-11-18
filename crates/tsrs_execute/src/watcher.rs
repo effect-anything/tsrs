@@ -821,6 +821,9 @@ impl Watcher {
         let result = self.compile_and_emit();
         cached.disable_and_clear_cache();
 
+        for dep in tsrs_compiler::mapper_deps::program_dependencies(Some(self.compiler_program())) {
+            tfs.add_seen_file(&dep);
+        }
         let seen = tfs.seen_files();
         self.seen_files = seen.iter().map(|p| self.to_path(p)).collect();
         self.seen_dirs = seen_directories(&self.seen_files);

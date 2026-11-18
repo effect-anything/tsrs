@@ -14,6 +14,10 @@ pub fn run_lsp(args: &[String]) -> i32 {
     flag.string("pipe", "use named pipe for communication");
     flag.string("socket", "use socket for communication");
     flag.int("clientProcessId", "use the given PID for the parent process watchdog");
+    flag.bool(
+        "runExternalCode",
+        "allow configured content mappers to run external code (default when the client sends no runExternalCode option)",
+    );
     if flag.parse(args).is_err() {
         return 2;
     }
@@ -22,6 +26,7 @@ pub fn run_lsp(args: &[String]) -> i32 {
     let _pipe = flag.string_value("pipe");
     let _socket = flag.string_value("socket");
     let client_process_id = flag.int_value("clientProcessId");
+    let run_external_code = flag.bool_value("runExternalCode");
 
     if !stdio {
         eprintln!("only stdio is supported");
@@ -71,6 +76,7 @@ pub fn run_lsp(args: &[String]) -> i32 {
         spawn: Some(Arc::new(tsrs_contentmapper::spawn_process)),
         progress_delay: Duration::from_millis(250),
         set_parent_process_id: new_parent_process_watchdog(&ctx, &stop, client_process_id),
+        run_external_code,
     });
 
     let result = s.run(&ctx);

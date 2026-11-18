@@ -590,13 +590,15 @@ impl SourceFileParser<'_> {
         &self,
         parse_options: SourceFileParseOptions,
     ) -> Option<P<SourceFile>> {
-        if tspath::file_extension_is_one_of(
+        let file = if tspath::file_extension_is_one_of(
             &parse_options.file_name,
             &str_slice(self.content_mapper_extensions),
         ) {
-            return self.parse_content_mapped_file(parse_options);
-        }
-        self.host.get_source_file(parse_options)
+            self.parse_content_mapped_file(parse_options)
+        } else {
+            self.host.get_source_file(parse_options)
+        };
+        ts_ext_transform::precheck::checked(file)
     }
 
     // parseContentMappedFile produces a content-mapped virtual source file via the host's content

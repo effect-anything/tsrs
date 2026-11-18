@@ -1009,6 +1009,11 @@ fn diagnostic_script_and_range(
         return (AnyScript::Original(original), loc);
     }
     let (mapped, fidelity) = span_map.virtual_to_original_span(loc);
+    if let Some(range) =
+        crate::ext_ls::invocation(span_map, loc).filter(|_| fidelity == Fidelity::None)
+    {
+        return (AnyScript::Original(original), range);
+    }
     if fidelity == Fidelity::None {
         // Entirely synthesized code has no original location; surface it at the top of the file.
         return (AnyScript::Original(original), new_text_range(0, 0));

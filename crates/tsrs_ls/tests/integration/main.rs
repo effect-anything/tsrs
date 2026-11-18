@@ -10,6 +10,7 @@ mod change {
     mod trackerimpl_test;
 }
 mod completions_smoke_test;
+mod ext_ls_test;
 mod findallreferences_test;
 mod format {
     mod api_test;

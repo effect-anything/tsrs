@@ -255,6 +255,7 @@ fn run_server(
         spawn,
         progress_delay: Duration::ZERO,
         set_parent_process_id: None,
+        run_external_code: false,
     });
     let ctx = Context::background();
     server.set_compiler_options_for_inferred_projects(&ctx, Some(P::new(options)));

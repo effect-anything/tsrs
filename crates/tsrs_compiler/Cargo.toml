@@ -33,8 +33,10 @@ tsrs_checker.workspace = true
 tsrs_declarations.workspace = true
 tsrs_printer.workspace = true
 tsrs_transformers.workspace = true
+ts_ext_transform.workspace = true
 rustc-hash.workspace = true
 rayon.workspace = true
+xxhash-rust.workspace = true
 
 [lib]
 test = false

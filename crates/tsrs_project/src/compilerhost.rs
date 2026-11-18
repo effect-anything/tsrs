@@ -209,7 +209,9 @@ impl CompilerHost for CompilerHostImpl {
                 .into());
             }
         };
-        let transform_identity = xxhash_rust::xxh3::xxh3_128(identity.as_bytes());
+        let path = parse_options.path.clone();
+        let transform_identity = xxhash_rust::xxh3::xxh3_128(identity.as_bytes())
+            ^ tsrs_compiler::mapper_deps::salt(path.as_str());
         let key = content_mapped_parse_cache_key(
             parse_options.clone(),
             fh.hash(),
@@ -239,6 +241,7 @@ impl CompilerHost for CompilerHostImpl {
             journal.deref_content_mapped(&cache, &key);
             return Err(err);
         }
+        tsrs_compiler::mapper_deps::record(path.as_str(), &files);
         Ok(files)
     }
 

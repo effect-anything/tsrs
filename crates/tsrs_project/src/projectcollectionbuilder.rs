@@ -2141,7 +2141,11 @@ impl ProjectCollectionBuilder {
 
                 let mut dirty_file_path = dirty_file_path.borrow_mut();
                 *dirty_file_path = p.dirty_file_path.clone();
-                for path in paths {
+                let paths =
+                    tsrs_compiler::mapper_deps::with_dependents(paths, p.program, &|name| {
+                        (self.to_path)(name)
+                    });
+                for path in paths.as_ref() {
                     if p.contains_file(path) {
                         dirty = true;
                         if change_type == lsproto::FileChangeType::DELETED {

@@ -731,7 +731,9 @@ impl Program {
         let mut old_supplemental_files: &[P<SourceFile>] = &[];
         let mut new_supplemental_files: Vec<P<SourceFile>> = Vec::new();
         if old_file.content_mapper().is_empty() {
-            new_file = new_host.get_source_file(old_file.parse_options().clone());
+            new_file = ts_ext_transform::precheck::checked(
+                new_host.get_source_file(old_file.parse_options().clone()),
+            );
         } else {
             // Content-mapped files are produced by running an external transform, which a plain reparse can't
             // reproduce. Re-run the transform through the host; any failure (or a missing file) falls back to
@@ -746,7 +748,7 @@ impl Program {
             {
                 Err(_) => return (None, None, false),
                 Ok(files) => {
-                    new_file = files.canonical;
+                    new_file = ts_ext_transform::precheck::checked(files.canonical);
                     old_supplemental_files = old_file.supplemental_source_files();
                     new_supplemental_files = files.supplemental;
                 }

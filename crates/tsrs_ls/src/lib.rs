@@ -21,6 +21,7 @@ mod definition;
 mod diagnostics;
 mod displaypartswriter;
 mod documenthighlights;
+pub mod ext_ls;
 mod file_rename;
 mod findallreferences;
 mod folding;

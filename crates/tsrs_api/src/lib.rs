@@ -14,6 +14,7 @@ pub(crate) mod batch;
 pub mod build;
 pub mod config;
 pub mod diagnostics;
+pub mod ext_api;
 pub mod handler;
 pub mod methods;
 pub mod module_resolution;

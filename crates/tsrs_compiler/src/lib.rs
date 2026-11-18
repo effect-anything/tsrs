@@ -10,6 +10,8 @@ pub mod fileregions;
 mod filesparser;
 mod host;
 mod includeprocessor;
+mod line_map;
+pub mod mapper_deps;
 mod processing_diagnostic;
 mod program;
 pub mod program_emit;

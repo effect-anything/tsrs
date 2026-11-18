@@ -52,6 +52,21 @@ pub struct ServerOptions {
     pub spawn: Option<SpawnFunc>,
     pub progress_delay: Duration, // delay before showing progress UI; 0 means no delay
     pub set_parent_process_id: Option<Box<dyn Fn(i32) + Send + Sync>>,
+    pub run_external_code: bool,
+}
+
+static DEFAULT_RUN_EXTERNAL_CODE: AtomicBool = AtomicBool::new(false);
+
+/// Sets the process-wide default for `runExternalCode` when a client sends no
+/// `initializationOptions.runExternalCode` (an explicit client option still wins).
+pub fn set_default_run_external_code(enabled: bool) {
+    // Relaxed: independent process-wide default flag with no dependent state.
+    DEFAULT_RUN_EXTERNAL_CODE.store(enabled, Ordering::Relaxed);
+}
+
+fn default_run_external_code() -> bool {
+    // Relaxed: reads the independent process-wide default flag.
+    DEFAULT_RUN_EXTERNAL_CODE.load(Ordering::Relaxed)
 }
 
 pub type NpmInstallFunc = Arc<dyn Fn(&str, &[String]) -> Result<Vec<u8>, String> + Send + Sync>;
@@ -109,6 +124,7 @@ pub fn new_server(opts: ServerOptions) -> Arc<Server> {
         progress_delay: opts.progress_delay,
         project_progress: OnceLock::new(),
         start_watchdog: opts.set_parent_process_id,
+        run_external_code_default: opts.run_external_code || default_run_external_code(),
         flake_logging: OnceLock::new(),
         api_sessions: Mutex::new(FxHashMap::default()),
     })
@@ -296,6 +312,7 @@ pub struct Server {
     project_progress: OnceLock<Arc<ProjectLoadingProgress>>,
 
     start_watchdog: Option<Box<dyn Fn(i32) + Send + Sync>>,
+    run_external_code_default: bool,
 
     flake_logging: OnceLock<lsproto::DiagnosticFlakeLogLevel>,
 
@@ -2008,10 +2025,9 @@ impl Server {
         if let Some(v) = opts.enable_telemetry {
             enable_telemetry = v;
         }
-        let mut run_external_code = false;
-        if let Some(v) = opts.run_external_code {
-            run_external_code = v;
-        }
+        let run_external_code = opts
+            .run_external_code
+            .unwrap_or_else(|| self.run_external_code_default || default_run_external_code());
         let has_dynamic_watch_registration =
             self.client_capabilities().workspace.did_change_watched_files.dynamic_registration;
         if has_dynamic_watch_registration {
@@ -2393,7 +2409,20 @@ impl Server {
         ls: &Arc<LanguageService>,
         params: &lsproto::HoverParams,
     ) -> Result<lsproto::HoverResponse, Error> {
-        ls.provide_hover(ctx, params)
+        tsrs_ls::ext_ls::provide_hover(ls, ctx, params)
+    }
+
+    #[expect(
+        clippy::unused_self,
+        reason = "Registered LSP handlers share a Server receiver so the dispatcher can call them uniformly."
+    )]
+    fn handle_show_expansion(
+        self: &Arc<Self>,
+        _ctx: &Context,
+        ls: &Arc<LanguageService>,
+        params: &lsproto::TextDocumentPositionParams,
+    ) -> Result<lsproto::CustomTextDocumentShowExpansionResponse, Error> {
+        tsrs_ls::ext_ls::show_expansion(ls, params)
     }
 
     // server.go:1911
@@ -3678,6 +3707,10 @@ fn handlers() -> &'static HandlerMap {
         handlers.register_language_service_document_request_handler(
             lsproto::CUSTOM_TEXT_DOCUMENT_SOURCE_DEFINITION_INFO,
             Server::handle_source_definition,
+        );
+        handlers.register_language_service_document_request_handler(
+            lsproto::CUSTOM_TEXT_DOCUMENT_SHOW_EXPANSION_INFO,
+            Server::handle_show_expansion,
         );
         handlers.register_language_service_document_request_handler(
             lsproto::TEXT_DOCUMENT_TYPE_DEFINITION_INFO,

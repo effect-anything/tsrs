@@ -58,6 +58,7 @@ fn options(out: Box<dyn Writer>) -> ServerOptions {
         spawn: None,
         progress_delay: std::time::Duration::ZERO,
         set_parent_process_id: None,
+        run_external_code: false,
     }
 }
 

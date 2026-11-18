@@ -131,13 +131,13 @@ fn resolve(d: P<Diagnostic>) -> ResolvedLocation {
 pub struct OriginalTextFile {
     file_name: &'static str,
     text: &'static str,
-    line_map: Vec<u32>,
+    line_map: std::sync::Arc<[u32]>,
 }
 
 // diagnosticwriter.go:122
 fn new_original_text_file(file: P<SourceFile>, file_name: &'static str) -> OriginalTextFile {
     let text = file.original_text();
-    OriginalTextFile { file_name, text, line_map: tsrs_core::compute_ecma_line_starts(text) }
+    OriginalTextFile { file_name, text, line_map: crate::line_map::original_line_map(text) }
 }
 
 // diagnosticwriter.go:144 (ASTDiagnostic).MessageChain

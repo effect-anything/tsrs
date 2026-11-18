@@ -405,6 +405,9 @@ impl Session {
             "ping" => return Ok(Response::Json("\"pong\"".to_string())),
             _ => {}
         }
+        if let Some(res) = crate::ext_api::handle(self, method, params) {
+            return res;
+        }
         let info = method_info(method)
             .ok_or_else(|| ApiError::invalid_request(format!("unknown API method {method:?}")))?;
         let raw_params = params;

@@ -211,11 +211,9 @@ impl ToProgramSnapshot {
             let old_file_info = old.and_then(|old| old.file_infos.load(file.path()));
             let version = match reused_version(old_compiler_program, old_file_info.as_ref(), file) {
                 Some(version) => version,
-                None if !file.content_mapper().is_empty() => self.snapshot.compute_hash(&format!(
-                    "{}\x00{}",
-                    file.original_text(),
-                    file.content_mapper_transform_identity()
-                )),
+                None if !file.content_mapper().is_empty() => {
+                    self.snapshot.compute_hash(&tsrs_compiler::mapper_deps::version_text(file))
+                }
                 None => self.snapshot.compute_hash(file.text()),
             };
             let implied_node_format =

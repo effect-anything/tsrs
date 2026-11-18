@@ -24762,6 +24762,9 @@ impl Method {
     // Request to get source definitions for a position.
     const CUSTOM_TEXT_DOCUMENT_SOURCE_DEFINITION: Method =
         Method("custom/textDocument/sourceDefinition");
+    // Request the macro expansion at a position: the macro and the code it produced.
+    pub const CUSTOM_TEXT_DOCUMENT_SHOW_EXPANSION: Method =
+        Method("custom/textDocument/showExpansion");
     // Request to get document highlights across multiple files.
     const CUSTOM_TEXT_DOCUMENT_MULTI_DOCUMENT_HIGHLIGHT: Method =
         Method("custom/textDocument/multiDocumentHighlight");
@@ -24943,6 +24946,7 @@ impl Method {
             "custom/textDocument/sourceDefinition" => {
                 Method::CUSTOM_TEXT_DOCUMENT_SOURCE_DEFINITION
             }
+            "custom/textDocument/showExpansion" => Method::CUSTOM_TEXT_DOCUMENT_SHOW_EXPANSION,
             "custom/textDocument/multiDocumentHighlight" => {
                 Method::CUSTOM_TEXT_DOCUMENT_MULTI_DOCUMENT_HIGHLIGHT
             }
@@ -25610,6 +25614,15 @@ pub const CUSTOM_TEXT_DOCUMENT_SOURCE_DEFINITION_INFO: RequestInfo<
     TextDocumentPositionParams,
     CustomTextDocumentSourceDefinitionResponse,
 > = RequestInfo::new(Method::CUSTOM_TEXT_DOCUMENT_SOURCE_DEFINITION);
+
+// Response type for `custom/textDocument/showExpansion`
+pub type CustomTextDocumentShowExpansionResponse = HoverOrNull;
+
+// Type mapping info for `custom/textDocument/showExpansion`
+pub const CUSTOM_TEXT_DOCUMENT_SHOW_EXPANSION_INFO: RequestInfo<
+    TextDocumentPositionParams,
+    CustomTextDocumentShowExpansionResponse,
+> = RequestInfo::new(Method::CUSTOM_TEXT_DOCUMENT_SHOW_EXPANSION);
 
 // Response type for `custom/textDocument/multiDocumentHighlight`
 pub type CustomMultiDocumentHighlightResponse = MultiDocumentHighlightsOrNull;

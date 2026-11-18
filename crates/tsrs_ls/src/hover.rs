@@ -86,7 +86,10 @@ impl LanguageService {
                 continue;
             }
             let mut c = program.get_type_checker_for_file(ctx, file);
-            let range_node = get_node_for_quick_info(node);
+            let mut range_node = get_node_for_quick_info(node);
+            if let Some(expr) = tsrs_checker::ext_overload::hover_expression(range_node) {
+                range_node = expr;
+            }
             let symbol = get_symbol_at_location_for_quick_info(&mut c, range_node);
 
             // Always create VerbosityContext for hover so that canExpandSymbol can signal
@@ -1465,8 +1468,9 @@ pub fn get_quick_info_and_declaration_at_location(
         return SymbolDisplayInfo { display_parts: w.dpw, declaration: None };
     }
     let Some(symbol) = symbol else {
-        if should_get_type(node) {
-            let t = c.get_type_at_location(node);
+        let overloaded = tsrs_checker::ext_overload::hover_expression(node);
+        if should_get_type(node) || overloaded.is_some() {
+            let t = c.get_type_at_location(overloaded.unwrap_or(node));
             w.write_type_classified(c, t, container, TYPE_FORMAT_FLAGS);
         }
         return SymbolDisplayInfo { display_parts: w.dpw, declaration: None };

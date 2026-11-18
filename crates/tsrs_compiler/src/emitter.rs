@@ -33,6 +33,7 @@ pub fn source_file_may_be_emitted(
     // include them in the emit set when their transformed TypeScript can produce declarations.
     // emitter.go:508
     if !source_file.content_mapper().is_empty()
+        && !tsrs_spanmap::emits_javascript(source_file.content_mapper())
         && !force_dts_emit
         && !options.get_emit_declarations()
     {
@@ -549,10 +550,29 @@ mod emit {
 
             let mut source_map_url_pos = None;
             if let Some(source_map_generator) = &mut source_map_generator {
+                let input_source_file_names = source_map_generator.sources().to_vec();
+                if !self.source_file.is_declaration_file()
+                    && !ts_ext_transform::precheck::is_declaration_output(js_file_path)
+                {
+                    let printed_js = writer.string();
+                    if let Some((rewritten_js, next_generator)) =
+                        ts_ext_transform::precheck::rewrite_emitted_with_generator(
+                            js_file_path,
+                            &printed_js,
+                            Some(source_map_generator),
+                        )
+                    {
+                        writer.clear();
+                        writer.raw_write(&rewritten_js);
+                        if let Some(next_generator) = next_generator {
+                            *source_map_generator = next_generator;
+                        }
+                    }
+                }
                 let source_map_start = self.times.start();
                 if map_options.source_map.is_true() || map_options.inline_source_map.is_true() {
                     self.emit_result.source_maps.push(SourceMapEmitResult {
-                        input_source_file_names: source_map_generator.sources().to_vec(),
+                        input_source_file_names,
                         source_map: source_map_generator.raw_source_map(),
                         generated_file: js_file_path.to_string(),
                     });
@@ -611,6 +631,17 @@ mod emit {
 
             // Write the output file
             let mut text = writer.take_string();
+            if source_map_generator.is_none()
+                && !self.source_file.is_declaration_file()
+                && let Some((rewritten_js, _)) =
+                    ts_ext_transform::precheck::rewrite_emitted_with_generator(
+                        js_file_path,
+                        &text,
+                        None,
+                    )
+            {
+                text = rewritten_js;
+            }
             if options.emit_bom.is_true() {
                 text = stringutil::add_utf8_byte_order_mark(&text);
             }
