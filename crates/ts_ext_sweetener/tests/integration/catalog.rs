@@ -31,21 +31,12 @@ fn codes_in(dir: &Path, out: &mut BTreeSet<String>) {
 #[test]
 fn every_emitted_code_is_in_the_catalog_and_no_other() {
     let mut emitted = BTreeSet::new();
-    codes_in(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut emitted,
-    );
+    codes_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut emitted);
     let listed: BTreeSet<String> = CATALOG.iter().map(|entry| entry.code.to_owned()).collect();
     let missing: Vec<_> = emitted.difference(&listed).collect();
     let stale: Vec<_> = listed.difference(&emitted).collect();
-    assert!(
-        missing.is_empty(),
-        "codes in src/ with no catalog entry: {missing:?}"
-    );
-    assert!(
-        stale.is_empty(),
-        "catalog entries no source emits: {stale:?}"
-    );
+    assert!(missing.is_empty(), "codes in src/ with no catalog entry: {missing:?}");
+    assert!(stale.is_empty(), "catalog entries no source emits: {stale:?}");
     let mut sorted: Vec<&str> = CATALOG.iter().map(|entry| entry.code).collect();
     sorted.sort_unstable();
     assert_eq!(
@@ -89,19 +80,11 @@ fn every_bad_example_reports_its_code() {
                     format!("{} {}", diagnostic.severity.as_str(), diagnostic.message)
                 })
                 .collect();
-            wrong.push(format!(
-                "{} ({}): got {got:?}",
-                entry.code,
-                entry.level.as_str()
-            ));
+            wrong.push(format!("{} ({}): got {got:?}", entry.code, entry.level.as_str()));
         }
     }
     let _ = std::fs::remove_dir_all(&root);
-    assert!(
-        wrong.is_empty(),
-        "examples that do not report their code:\n{}",
-        wrong.join("\n")
-    );
+    assert!(wrong.is_empty(), "examples that do not report their code:\n{}", wrong.join("\n"));
 }
 
 #[test]

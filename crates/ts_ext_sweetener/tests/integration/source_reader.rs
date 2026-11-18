@@ -1,11 +1,11 @@
 //! Macro-module resolution through an installed `SourceReader`, with no file
-//! on disk. One test function: the reader is process-wide, and an integration
-//! test binary is its own process, so nothing else in the crate sees it.
+//! on disk. Virtual `/virtual` paths are isolated to `Memory`; disk paths used
+//! by concurrent integration tests delegate to `std::fs`.
 
-use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tsrs_core::collections::OrderedMap;
 
 use ts_ext_sweetener::{
     ExpandRequest, Phase, SourceReader, clear_source_reader, expand, set_source_reader,
@@ -13,29 +13,35 @@ use ts_ext_sweetener::{
 
 /// Files by absolute, normalized path.
 #[derive(Default)]
-struct Memory(Mutex<HashMap<PathBuf, String>>);
+struct Memory(Mutex<OrderedMap<PathBuf, String>>);
 
 impl Memory {
     fn put(&self, path: &str, text: &str) {
-        self.0
-            .lock()
-            .expect("lock")
-            .insert(PathBuf::from(path), text.to_owned());
+        self.0.lock().expect("lock").insert(PathBuf::from(path), text.to_owned());
     }
 }
 
 impl SourceReader for Memory {
     fn read(&self, path: &Path) -> Option<String> {
-        self.0.lock().ok()?.get(path).cloned()
+        let normalized = normalize(path);
+        if normalized.starts_with("/virtual") {
+            self.0.lock().ok()?.get(&normalized).cloned()
+        } else {
+            std::fs::read_to_string(path).ok()
+        }
     }
 
     /// Like `Path::canonicalize` on a tree with no symlinks: `.` and `..` are
     /// resolved lexically, and the result must name a file or a directory.
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        let path = normalize(path);
+        let normalized = normalize(path);
+        if !normalized.starts_with("/virtual") {
+            return path.canonicalize();
+        }
         let files = self.0.lock().map_err(|_| io::ErrorKind::Other)?;
-        if files.contains_key(&path) || files.keys().any(|file| file.starts_with(&path)) {
-            Ok(path)
+        if files.contains_key(&normalized) || files.keys().any(|file| file.starts_with(&normalized))
+        {
+            Ok(normalized)
         } else {
             Err(io::ErrorKind::NotFound.into())
         }
@@ -59,24 +65,16 @@ fn normalize(path: &Path) -> PathBuf {
 
 // The fixture of `cases/examples-language-tour-new-source-aware-debug-main`.
 const MACROS: &str = "export syntax debug:expr {\n  rule { debug($value:expr) } => {\n    ((result) => ({ expression: #text($value), result }))($value)\n  }\n}\n";
-const MAIN: &str =
-    "import { debug } from \"./macros.sts\" for syntax;\n\nexport const inspected = debug(20 + 22);\n";
+const MAIN: &str = "import { debug } from \"./macros.sts\" for syntax;\n\nexport const inspected = debug(20 + 22);\n";
 const MAIN_PATH: &str = "/virtual/app/main.sts";
 
 fn expand_main() -> ts_ext_sweetener::Expansion {
-    expand(ExpandRequest {
-        filename: MAIN_PATH,
-        code: MAIN,
-        phase: Phase::Check,
-    })
+    expand(ExpandRequest { filename: MAIN_PATH, code: MAIN, phase: Phase::Check })
 }
 
 #[test]
 fn macro_modules_resolve_through_the_installed_reader() {
-    assert!(
-        !Path::new("/virtual").exists(),
-        "the test root must not exist on disk"
-    );
+    assert!(!Path::new("/virtual").exists(), "the test root must not exist on disk");
 
     // 1. The module exists only in memory, and the expansion finds it.
     let memory = Arc::new(Memory::default());
@@ -85,15 +83,9 @@ fn macro_modules_resolve_through_the_installed_reader() {
     set_source_reader(memory.clone());
 
     let expansion = expand_main();
+    assert!(expansion.diagnostics.is_empty(), "{:?}", expansion.diagnostics);
     assert!(
-        expansion.diagnostics.is_empty(),
-        "{:?}",
-        expansion.diagnostics
-    );
-    assert!(
-        expansion.code.contains(
-            "((result) => ({ expression: \"20 + 22\", result }))(20 + 22)"
-        ),
+        expansion.code.contains("((result) => ({ expression: \"20 + 22\", result }))(20 + 22)"),
         "{}",
         expansion.code
     );
@@ -105,21 +97,14 @@ fn macro_modules_resolve_through_the_installed_reader() {
         &MACROS.replace("expression: #text($value)", "source: #text($value)"),
     );
     let changed = expand_main();
-    assert!(
-        changed.code.contains("source: \"20 + 22\""),
-        "stale memo hit: {}",
-        changed.code
-    );
+    assert!(changed.code.contains("source: \"20 + 22\""), "stale memo hit: {}", changed.code);
 
     // 3. A reader that lacks the module reports it missing, through the reader:
     // the expansion does not fall through to the disk.
     set_source_reader(Arc::new(Memory::default()));
     let missing = expand_main();
     assert!(
-        missing
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.starts_with("SWR5002")),
+        missing.diagnostics.iter().any(|diagnostic| diagnostic.message.starts_with("SWR5002")),
         "{:?}",
         missing.diagnostics
     );
@@ -129,10 +114,7 @@ fn macro_modules_resolve_through_the_installed_reader() {
     clear_source_reader();
     let on_disk = expand_main();
     assert!(
-        on_disk
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.starts_with("SWR5002")),
+        on_disk.diagnostics.iter().any(|diagnostic| diagnostic.message.starts_with("SWR5002")),
         "{:?}",
         on_disk.diagnostics
     );

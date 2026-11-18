@@ -14,42 +14,42 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ts_goport::astdata::SyntaxKind;
-use ts_goport::core::Node;
-use ts_goport::flags::ScriptKind;
-use ts_goport::frontend::parser::{SourceFileParseOptions, parse_source_file};
+use rustc_hash::FxHashMap;
+use tsrs_ast::{Kind, Node, SourceFileParseOptions};
+use tsrs_core::{P, ScriptKind, arena::Region};
+use tsrs_parser::parse_source_file_owned;
 
 use crate::Segment;
 
-pub(crate) const OPEN: &str = "__swp";
+pub const OPEN: &str = "__swp";
 const HOIST: &str = "/*__swlet ";
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
-    static REGIONS: std::cell::RefCell<std::collections::HashMap<usize, (String, String, bool)>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static REGIONS: std::cell::RefCell<FxHashMap<usize, (String, String, bool)>> =
+        std::cell::RefCell::new(FxHashMap::default());
 }
 
 /// The text around one `#parameterize` body: a call to a marker, so the
 /// reader keeps the body together as one group and no capture can take a
 /// marker without the rest of the region.
-pub(crate) fn parameter_markers(param: &str, value: &str, required: bool) -> (String, String) {
+pub fn parameter_markers(param: &str, value: &str, required: bool) -> (String, String) {
+    // Relaxed: monotonic counter only needs uniqueness across calls, not synchronization.
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     REGIONS.with(|regions| {
-        regions
-            .borrow_mut()
-            .insert(id, (param.to_owned(), value.to_owned(), required));
+        regions.borrow_mut().insert(id, (param.to_owned(), value.to_owned(), required));
     });
     (format!("{OPEN}{id}("), ")".to_owned())
 }
 
 /// The header of region `id`, and a fresh id for the same header (an item
 /// the expander replays prints its regions under new ids).
-pub(crate) fn region(id: usize) -> Option<(String, String, bool)> {
+pub fn region(id: usize) -> Option<(String, String, bool)> {
     REGIONS.with(|regions| regions.borrow().get(&id).cloned())
 }
 
 pub(crate) fn renumber_region(header: (String, String, bool)) -> usize {
+    // Relaxed: monotonic counter only needs uniqueness across calls, not synchronization.
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     REGIONS.with(|regions| regions.borrow_mut().insert(id, header));
     id
@@ -67,13 +67,13 @@ pub(crate) fn lets_empty() -> bool {
     LETS.with(|lets| lets.borrow().is_empty())
 }
 
-pub(crate) fn hoist_marker(binder: &str) -> String {
+pub fn hoist_marker(binder: &str) -> String {
     format!("{HOIST}{binder}*/")
 }
 
 /// A parameter a `required` region never used.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Unused {
+pub struct Unused {
     pub param: String,
     /// The region's body as printed: where upstream reports SWR4022.
     pub body: String,
@@ -189,9 +189,7 @@ fn scan_code(text: &str, mut f: impl FnMut(usize, char) -> bool) {
             continue;
         }
         if text[at..].starts_with("/*") {
-            at = text[at + 2..]
-                .find("*/")
-                .map_or(text.len(), |e| at + 2 + e + 2);
+            at = text[at + 2..].find("*/").map_or(text.len(), |e| at + 2 + e + 2);
             continue;
         }
         if ch == '"' || ch == '\'' {
@@ -225,7 +223,7 @@ fn scan_code(text: &str, mut f: impl FnMut(usize, char) -> bool) {
 }
 
 /// Replace every parameter use inside resolved regions, innermost first.
-pub(crate) fn resolve_parameters(code: &str) -> (String, Vec<Unused>) {
+pub fn resolve_parameters(code: &str) -> (String, Vec<Unused>) {
     let mut code = code.to_owned();
     let mut unused = Vec::new();
     loop {
@@ -258,10 +256,7 @@ pub(crate) fn resolve_parameters(code: &str) -> (String, Vec<Unused>) {
         };
         let (replaced, count) = substitute(&code[paren + 1..close], &param, &value);
         if required && count == 0 {
-            unused.push(Unused {
-                param,
-                body: code[paren + 1..close].trim().to_owned(),
-            });
+            unused.push(Unused { param, body: code[paren + 1..close].trim().to_owned() });
         }
         code.replace_range(at..close + 1, &replaced);
     }
@@ -296,7 +291,7 @@ fn ident_char(ch: char) -> bool {
 }
 
 /// Replace uses of `param` in code positions of `text` with `value`.
-pub(crate) fn substitute(text: &str, param: &str, value: &str) -> (String, usize) {
+pub fn substitute(text: &str, param: &str, value: &str) -> (String, usize) {
     let (out, uses) = substitute_at(text, param, value);
     (out, uses.len())
 }
@@ -350,9 +345,7 @@ fn substitute_at(text: &str, param: &str, value: &str) -> (String, Vec<usize>) {
             continue;
         }
         if text[at..].starts_with("/*") {
-            let end = text[at + 2..]
-                .find("*/")
-                .map_or(text.len(), |e| at + 2 + e + 2);
+            let end = text[at + 2..].find("*/").map_or(text.len(), |e| at + 2 + e + 2);
             out.push_str(&text[at..end]);
             at = end;
             continue;
@@ -477,10 +470,7 @@ pub(crate) fn rename_outside(
         }
         (offset as isize + d).max(0) as usize
     };
-    let spans = spans
-        .iter()
-        .map(|(from, to)| (shift(*from), shift(*to)))
-        .collect();
+    let spans = spans.iter().map(|(from, to)| (shift(*from), shift(*to))).collect();
     (out, spans)
 }
 
@@ -491,37 +481,36 @@ pub(crate) fn suspends(text: &str) -> bool {
     awaits + yields > 0
 }
 
-fn function_like(kind: SyntaxKind) -> bool {
+fn function_like(kind: Kind) -> bool {
     matches!(
         kind,
-        SyntaxKind::FunctionDeclaration
-            | SyntaxKind::FunctionExpression
-            | SyntaxKind::ArrowFunction
-            | SyntaxKind::MethodDeclaration
-            | SyntaxKind::GetAccessor
-            | SyntaxKind::SetAccessor
-            | SyntaxKind::Constructor
+        Kind::FunctionDeclaration
+            | Kind::FunctionExpression
+            | Kind::ArrowFunction
+            | Kind::MethodDeclaration
+            | Kind::GetAccessor
+            | Kind::SetAccessor
+            | Kind::Constructor
     )
 }
 
 /// The block body `{` of the innermost function around `at`, or the start of
 /// the top-level statement holding it.
-fn hoist_site(root: Node, at: usize, code: &str) -> usize {
+fn hoist_site(root: P<Node>, at: usize, code: &str) -> usize {
     let mut site = None;
     let mut statement = 0;
-    fn walk(node: Node, at: usize, code: &str, site: &mut Option<usize>) {
-        node.for_each_child(|child| {
-            if child == node {
-                return false;
-            }
-            let (pos, end) = (child.pos().max(0) as usize, child.end().max(0) as usize);
+    fn walk(node: P<Node>, at: usize, code: &str, site: &mut Option<usize>) {
+        node.for_each_child_static(&mut |child| {
+            let pos = child.pos().source_offset().unwrap_or(0) as usize;
+            let end = child.end().source_offset().unwrap_or(0) as usize;
             if pos <= at && at < end {
                 if function_like(child.kind()) {
-                    let body = child.body();
-                    if !body.is_nil() && body.kind() == SyntaxKind::Block {
-                        let from = body.pos().max(0) as usize;
-                        if let Some(open) = code[from..].find('{') {
-                            *site = Some(from + open + 1);
+                    if let Some(body) = child.body() {
+                        if body.kind() == Kind::Block {
+                            let from = body.pos().source_offset().unwrap_or(0) as usize;
+                            if let Some(open) = code[from..].find('{') {
+                                *site = Some(from + open + 1);
+                            }
                         }
                     }
                 }
@@ -530,8 +519,9 @@ fn hoist_site(root: Node, at: usize, code: &str) -> usize {
             false
         });
     }
-    for child in root.statements().iter() {
-        let (pos, end) = (child.pos().max(0) as usize, child.end().max(0) as usize);
+    for &child in root.statements() {
+        let pos = child.pos().source_offset().unwrap_or(0) as usize;
+        let end = child.end().source_offset().unwrap_or(0) as usize;
         if pos <= at && at < end {
             let leading = code[pos..end].len() - code[pos..end].trim_start().len();
             statement = pos + leading;
@@ -543,38 +533,41 @@ fn hoist_site(root: Node, at: usize, code: &str) -> usize {
 
 /// Declare every `#let` binder that a suspending body assigns, at the top of
 /// its function, and drop the markers. Segments move with the text.
-pub(crate) fn hoist(code: &str, segments: &mut [Segment], tsx: bool) -> String {
+pub fn hoist(code: &str, segments: &mut [Segment], tsx: bool) -> String {
     if !code.contains(HOIST) {
         return code.to_owned();
     }
-    let leaked: &'static str = Box::leak(code.to_owned().into_boxed_str());
-    let opts = SourceFileParseOptions {
-        file_name: if tsx { "/hoist.tsx" } else { "/hoist.ts" }.to_owned(),
-        ..SourceFileParseOptions::default()
-    };
-    let kind = if tsx { ScriptKind::TSX } else { ScriptKind::TS };
-    let file = parse_source_file(&opts, leaked, kind);
-    let mut sites: Vec<(usize, Vec<String>)> = Vec::new();
-    let mut removals: Vec<(usize, usize)> = Vec::new();
-    let mut from = 0;
-    while let Some(found) = code[from..].find(HOIST) {
-        let at = from + found;
-        let Some(close) = code[at..].find("*/").map(|c| at + c) else {
-            break;
+    let (sites, removals) = {
+        let region = Region::new(64 << 10);
+        let _guard = region.enter();
+        let opts = SourceFileParseOptions {
+            file_name: if tsx { "/hoist.tsx" } else { "/hoist.ts" }.to_owned(),
+            ..SourceFileParseOptions::default()
         };
-        let binder = code[at + HOIST.len()..close].to_owned();
-        let site = hoist_site(file.root, at, code);
-        match sites.iter_mut().find(|(s, _)| *s == site) {
-            Some((_, names)) => names.push(binder),
-            None => sites.push((site, vec![binder])),
+        let kind = if tsx { ScriptKind::TSX } else { ScriptKind::TS };
+        let file = parse_source_file_owned(opts, code.to_owned(), kind);
+        let root = file.as_node();
+        let mut sites: Vec<(usize, Vec<String>)> = Vec::new();
+        let mut removals: Vec<(usize, usize)> = Vec::new();
+        let mut from = 0;
+        while let Some(found) = code[from..].find(HOIST) {
+            let at = from + found;
+            let Some(close) = code[at..].find("*/").map(|c| at + c) else {
+                break;
+            };
+            let binder = code[at + HOIST.len()..close].to_owned();
+            let site = hoist_site(root, at, code);
+            match sites.iter_mut().find(|(s, _)| *s == site) {
+                Some((_, names)) => names.push(binder),
+                None => sites.push((site, vec![binder])),
+            }
+            removals.push((at, close + 2));
+            from = close + 2;
         }
-        removals.push((at, close + 2));
-        from = close + 2;
-    }
-    let mut edits: Vec<(usize, usize, String)> = removals
-        .into_iter()
-        .map(|(a, b)| (a, b, String::new()))
-        .collect();
+        (sites, removals)
+    };
+    let mut edits: Vec<(usize, usize, String)> =
+        removals.into_iter().map(|(a, b)| (a, b, String::new())).collect();
     for (site, names) in sites {
         let text = if code[..site].ends_with('{') {
             format!(" let {};", names.join(", "))
@@ -633,46 +626,4 @@ pub(crate) fn apply_edits(
         }
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn operator_parameter_is_an_operand_only() {
-        assert_eq!(substitute("% % 5", "%", "t"), ("t % 5".to_owned(), 1));
-        assert_eq!(
-            substitute("[%, % * 10]", "%", "t"),
-            ("[t, t * 10]".to_owned(), 2)
-        );
-        assert_eq!(substitute("`$ ${%}`", "%", "t"), ("`$ ${t}`".to_owned(), 1));
-        assert_eq!(substitute("x %= 2", "%", "t").1, 0);
-        assert_eq!(substitute("\"%\" + %", "%", "t").0, "\"%\" + t");
-    }
-
-    #[test]
-    fn inner_regions_resolve_first() {
-        let (open_b, close_b) = parameter_markers("%", "B", false);
-        let (open_a, close_a) = parameter_markers("%", "A", true);
-        let outer = format!("{open_a}f(%, {open_b}%.b{close_b}){close_a}");
-        assert_eq!(resolve_parameters(&outer), ("f(A, B.b)".to_owned(), vec![]));
-        let strings = format!("{open_a}\")\" + %{close_a}");
-        assert_eq!(resolve_parameters(&strings).0, "\")\" + A");
-        let (open, close) = parameter_markers("%", "A", true);
-        let lonely = format!("{open}1{close}");
-        assert_eq!(resolve_parameters(&lonely).1.len(), 1);
-    }
-
-    #[test]
-    fn hoists_into_the_enclosing_function() {
-        let code = format!(
-            "function* g() {{\n  const r = (t = 1, (yield t){});\n}}\n",
-            hoist_marker("t")
-        );
-        assert_eq!(
-            hoist(&code, &mut [], false),
-            "function* g() { let t;\n  const r = (t = 1, (yield t));\n}\n"
-        );
-    }
 }

@@ -133,10 +133,7 @@ pub fn read_syntax(source: &str) -> ReadSyntax {
         open: Vec::new(),
     };
     let children = reader.read_until(None);
-    ReadSyntax {
-        children,
-        diagnostics: reader.diagnostics,
-    }
+    ReadSyntax { children, diagnostics: reader.diagnostics }
 }
 
 struct Reader<'a> {
@@ -228,11 +225,7 @@ impl<'a> Reader<'a> {
             let mut split_at = None;
             for (at, child) in children.iter().enumerate() {
                 let start = node_span_start(child);
-                if self
-                    .source
-                    .get(prev_end..start)
-                    .is_some_and(|gap| gap.contains('\n'))
-                {
+                if self.source.get(prev_end..start).is_some_and(|gap| gap.contains('\n')) {
                     split_at = Some((at, prev_end, start));
                     break;
                 }
@@ -245,9 +238,8 @@ impl<'a> Reader<'a> {
                 // continued this one.
                 end = prev_end;
                 let _ = start;
-                self.index = self.source[prev_end..]
-                    .find('\n')
-                    .map_or(prev_end, |rel| prev_end + rel + 1);
+                self.index =
+                    self.source[prev_end..].find('\n').map_or(prev_end, |rel| prev_end + rel + 1);
             } else if let Some(last) = children.last() {
                 end = node_span_end(last);
             } else {
@@ -502,10 +494,7 @@ fn node_span_of(node: &Syntax) -> Span {
 }
 
 fn span(start: usize, end: usize) -> Span {
-    Span {
-        start: u32_at(start),
-        end: u32_at(end),
-    }
+    Span { start: u32_at(start), end: u32_at(end) }
 }
 
 fn u32_at(offset: usize) -> u32 {
@@ -547,65 +536,4 @@ pub fn slice<'a>(source: &'a str, node: &Syntax) -> &'a str {
         | Syntax::Group { span, .. } => (span.start as usize, span.end as usize),
     };
     source.get(start..end).unwrap_or("")
-}
-
-#[cfg(test)]
-mod outer_closer_tests {
-    use super::read_syntax;
-
-    #[test]
-    fn reader_outer_closer_ends_unclosed_inner_group() {
-        let read = read_syntax("f { g(a, b }\nh()");
-        let codes: Vec<&str> = read.diagnostics.iter().map(|d| &d.message[..7]).collect();
-        assert_eq!(codes, vec!["SWR1003"]);
-    }
-
-    /// Multi-byte scalars, combining marks, emoji and the scalars on either
-    /// side of the surrogate range, dropped into every byte-scanned form.
-    #[test]
-    fn reader_survives_multibyte_boundaries() {
-        let marks = [
-            "\u{e9}",
-            "\u{6c49}",
-            "\u{1f600}",
-            "\u{0301}",
-            "\u{200d}",
-            "\u{fe0f}",
-            "\u{d7ff}",
-            "\u{e000}",
-            "\u{1f468}\u{200d}\u{1f469}",
-        ];
-        let frames = [
-            "const a = {m};",
-            "/* {m} */ const a = 1;",
-            "// {m}\nconst a = 1;",
-            "const a = \"{m}\";",
-            "const a = '{m}';",
-            "const a = `{m}`;",
-            "const a = `${{m}}`;",
-            "const a = `{m} ${x}`;",
-            "f({m})",
-            "f {{ {m} }",
-            "{m}(a, b",
-            "\"{m}",
-            "`{m}",
-            "/{m}/g",
-            "a {m} b",
-            "{m}{m}",
-        ];
-        for mark in marks {
-            for frame in frames {
-                let code = frame.replace("{m}", mark);
-                let read = std::panic::catch_unwind(|| read_syntax(&code));
-                let read = read.unwrap_or_else(|_| panic!("reader panicked on {code:?}"));
-                for node in &read.children {
-                    let text = super::slice(&code, node);
-                    assert!(
-                        code.contains(text) || text.is_empty(),
-                        "slice left the source: {text:?} of {code:?}"
-                    );
-                }
-            }
-        }
-    }
 }

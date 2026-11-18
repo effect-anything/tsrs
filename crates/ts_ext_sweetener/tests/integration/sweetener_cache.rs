@@ -10,19 +10,11 @@ fn file_memo_matches_fresh_expansion_and_tracks_module_edits() {
     let dir = std::env::temp_dir().join(format!("swcache-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let module = dir.join("m.sts");
-    fs::write(
-        &module,
-        "export syntax one:expr {\n  rule { one() } => { 1 }\n}\n",
-    )
-    .unwrap();
+    fs::write(&module, "export syntax one:expr {\n  rule { one() } => { 1 }\n}\n").unwrap();
     let filename = dir.join("main.sts");
     let code = "import { one } from \"./m.sts\" for syntax;\nconst a = one();\n";
     let run = || {
-        expand(ExpandRequest {
-            filename: filename.to_str().unwrap(),
-            code,
-            phase: Phase::Check,
-        })
+        expand(ExpandRequest { filename: filename.to_str().unwrap(), code, phase: Phase::Check })
     };
     let first = run();
     assert!(first.code.contains("const a = 1;"), "{}", first.code);
@@ -30,11 +22,7 @@ fn file_memo_matches_fresh_expansion_and_tracks_module_edits() {
     let second = run();
     assert_eq!(first, second);
 
-    fs::write(
-        &module,
-        "export syntax one:expr {\n  rule { one() } => { 100 }\n}\n",
-    )
-    .unwrap();
+    fs::write(&module, "export syntax one:expr {\n  rule { one() } => { 100 }\n}\n").unwrap();
     let edited = run();
     assert!(edited.code.contains("const a = 100;"), "{}", edited.code);
     assert_eq!(edited, run());
@@ -42,10 +30,7 @@ fn file_memo_matches_fresh_expansion_and_tracks_module_edits() {
     fs::remove_file(&module).unwrap();
     let missing = run();
     assert!(
-        missing
-            .diagnostics
-            .iter()
-            .any(|d| d.message.starts_with("SWR5002")),
+        missing.diagnostics.iter().any(|d| d.message.starts_with("SWR5002")),
         "{:?}",
         missing.diagnostics
     );
@@ -55,11 +40,7 @@ fn file_memo_matches_fresh_expansion_and_tracks_module_edits() {
 #[test]
 fn memoized_expansion_of_a_plain_file_equals_an_uncached_one() {
     let code = "syntax two:expr {\n  rule { two($x:expr) } => { [$x, $x] }\n}\nconst b = two(`a${two(1)}`);\n";
-    let request = || ExpandRequest {
-        filename: "fuzz.sts",
-        code,
-        phase: Phase::Check,
-    };
+    let request = || ExpandRequest { filename: "fuzz.sts", code, phase: Phase::Check };
     let cold = expand(request());
     let warm = expand(request());
     assert_eq!(cold, warm);
@@ -85,24 +66,14 @@ fn creating_a_missing_module_invalidates_the_memo() {
     fs::create_dir_all(&dir).unwrap();
     let code = "import { one } from \"./later.sts\" for syntax;\nconst a = one();\n";
     let missing = expand_in(&dir, code);
-    assert!(
-        missing
-            .diagnostics
-            .iter()
-            .any(|d| d.message.starts_with("SWR5002"))
-    );
+    assert!(missing.diagnostics.iter().any(|d| d.message.starts_with("SWR5002")));
     assert_eq!(missing, expand_in(&dir, code));
     fs::write(dir.join("later.sts"), ONE).unwrap();
     let found = expand_in(&dir, code);
     assert!(found.diagnostics.is_empty(), "{:?}", found.diagnostics);
     assert!(found.code.contains("const a = 1;"), "{}", found.code);
     fs::remove_file(dir.join("later.sts")).unwrap();
-    assert!(
-        expand_in(&dir, code)
-            .diagnostics
-            .iter()
-            .any(|d| d.message.starts_with("SWR5002"))
-    );
+    assert!(expand_in(&dir, code).diagnostics.iter().any(|d| d.message.starts_with("SWR5002")));
     fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -135,18 +106,10 @@ fn retargeting_a_symlinked_module_invalidates_the_memo() {
     std::os::unix::fs::symlink(dir.join("a.sts"), dir.join("m.sts")).unwrap();
     let code = "import { one } from \"./m.sts\" for syntax;\nconst a = one();\n";
     let first = expand_in(&dir, code);
-    assert!(
-        first.dependencies[0].ends_with("a.sts"),
-        "{:?}",
-        first.dependencies
-    );
+    assert!(first.dependencies[0].ends_with("a.sts"), "{:?}", first.dependencies);
     fs::remove_file(dir.join("m.sts")).unwrap();
     std::os::unix::fs::symlink(dir.join("b.sts"), dir.join("m.sts")).unwrap();
     let second = expand_in(&dir, code);
-    assert!(
-        second.dependencies[0].ends_with("b.sts"),
-        "{:?}",
-        second.dependencies
-    );
+    assert!(second.dependencies[0].ends_with("b.sts"), "{:?}", second.dependencies);
     fs::remove_dir_all(&dir).unwrap();
 }

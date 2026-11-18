@@ -16,59 +16,74 @@
 //! - a shorthand `{ x }` prints `{ x: x_N }`, and `import { a }` prints
 //!   `import { a as a_N }`; a property position keeps the spelling.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ts_goport::astdata::SyntaxKind;
-use ts_goport::core::Node;
-use ts_goport::flags::{ModifierFlags, ScriptKind};
-use ts_goport::frontend::parser::{SourceFileParseOptions, parse_source_file};
+use rustc_hash::{FxHashMap, FxHashSet};
+use tsrs_ast::{Kind, ModifierFlags, Node, SourceFileParseOptions};
+use tsrs_core::{P, ScriptKind, arena::Region};
+use tsrs_parser::parse_source_file_owned;
 
 use crate::Segment;
 
-pub(crate) const PREFIX: &str = "__swh";
+pub const PREFIX: &str = "__swh";
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 /// A fresh placeholder for one introduced binder named `name`.
-pub(crate) fn placeholder(name: &str) -> String {
-    // Tests force an expander panic through a `#fresh` hint. Every fresh
-    // binder, including one a later pass reprints, comes through here, and
-    // the expander never produces this hint itself.
-    #[cfg(test)]
-    if name == crate::sweetener_expand::PANIC_FRESH_HINT {
+pub fn placeholder(name: &str) -> String {
+    // Tests force an expander panic through a `#fresh` hint when enabled on
+    // this expansion thread.
+    if name == crate::sweetener_expand::PANIC_FRESH_HINT && PANIC_ON_HINT.get() {
         panic!("forced expander panic");
     }
+    // Relaxed: monotonic counter only needs uniqueness across calls, not synchronization.
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     format!("{PREFIX}{id}_{name}")
 }
 
 thread_local! {
-    static SCOPE: std::cell::RefCell<Option<HashMap<String, String>>> =
-        const { std::cell::RefCell::new(None) };
-    static REMEMBERED: std::cell::RefCell<HashMap<String, String>> =
-        std::cell::RefCell::new(HashMap::new());
+    static PANIC_ON_HINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SCOPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REMEMBERED: std::cell::RefCell<BTreeMap<String, String>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+pub(crate) fn panic_on_hint() -> bool {
+    PANIC_ON_HINT.get()
+}
+
+pub(crate) fn with_panic_hint<T>(enabled: bool, f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PANIC_ON_HINT.set(self.0);
+        }
+    }
+    let _reset = Reset(PANIC_ON_HINT.replace(enabled));
+    f()
 }
 
 /// Run `f` as one expansion: `scoped` gives each spelling one placeholder.
 pub(crate) fn in_scope<T>(f: impl FnOnce() -> T) -> T {
-    let saved = SCOPE.with(|scope| scope.replace(Some(HashMap::new())));
+    let saved = SCOPE.replace(true);
     let out = f();
-    SCOPE.with(|scope| *scope.borrow_mut() = saved);
+    SCOPE.set(saved);
     out
 }
 
 /// A fresh placeholder id, for an item the expander replays (`items`).
 pub(crate) fn fresh_id() -> usize {
+    // Relaxed: monotonic counter only needs uniqueness across calls, not synchronization.
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Whether a `scoped` expansion is running.
 pub(crate) fn scope_active() -> bool {
-    SCOPE.with(|scope| scope.borrow().is_some())
+    SCOPE.get()
 }
 
 /// The spellings handed to later forms so far.
-pub(crate) fn remembered() -> HashMap<String, String> {
+pub(crate) fn remembered() -> BTreeMap<String, String> {
     REMEMBERED.with(|map| map.borrow().clone())
 }
 
@@ -76,7 +91,7 @@ pub(crate) fn remembered_is_empty() -> bool {
     REMEMBERED.with(|map| map.borrow().is_empty())
 }
 
-pub(crate) fn set_remembered(remembered: HashMap<String, String>) {
+pub(crate) fn set_remembered(remembered: BTreeMap<String, String>) {
     REMEMBERED.with(|map| *map.borrow_mut() = remembered);
 }
 
@@ -98,9 +113,7 @@ fn spelling(text: &str) -> Option<&str> {
     if digits == 0 {
         return None;
     }
-    rest[digits..]
-        .strip_prefix('_')
-        .filter(|name| !name.is_empty())
+    rest[digits..].strip_prefix('_').filter(|name| !name.is_empty())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -133,37 +146,37 @@ struct Ident {
     export_specifier: bool,
 }
 
-fn role_of(ident: Node, parent: Node) -> Role {
-    let is_name = || parent.name() == ident;
+fn role_of(ident: P<Node>, parent: P<Node>) -> Role {
+    let is_name = || parent.name() == Some(ident);
     match parent.kind() {
-        SyntaxKind::Parameter => {
+        Kind::Parameter => {
             if is_name() {
                 Role::Binder
             } else {
                 Role::Property
             }
         }
-        SyntaxKind::VariableDeclaration
-        | SyntaxKind::FunctionDeclaration
-        | SyntaxKind::FunctionExpression
-        | SyntaxKind::ClassDeclaration
-        | SyntaxKind::ClassExpression
-        | SyntaxKind::InterfaceDeclaration
-        | SyntaxKind::TypeAliasDeclaration
-        | SyntaxKind::EnumDeclaration
-        | SyntaxKind::ModuleDeclaration
-        | SyntaxKind::TypeParameter
-        | SyntaxKind::ImportClause
-        | SyntaxKind::NamespaceImport
-        | SyntaxKind::ImportEqualsDeclaration => {
+        Kind::VariableDeclaration
+        | Kind::FunctionDeclaration
+        | Kind::FunctionExpression
+        | Kind::ClassDeclaration
+        | Kind::ClassExpression
+        | Kind::InterfaceDeclaration
+        | Kind::TypeAliasDeclaration
+        | Kind::EnumDeclaration
+        | Kind::ModuleDeclaration
+        | Kind::TypeParameter
+        | Kind::ImportClause
+        | Kind::NamespaceImport
+        | Kind::ImportEqualsDeclaration => {
             if is_name() {
                 Role::Binder
             } else {
                 Role::Reference
             }
         }
-        SyntaxKind::BindingElement | SyntaxKind::ImportSpecifier => {
-            if parent.property_name() == ident {
+        Kind::BindingElement => {
+            if parent.as_binding_element().property_name() == Some(ident) {
                 Role::Property
             } else if is_name() {
                 Role::Binder
@@ -171,106 +184,100 @@ fn role_of(ident: Node, parent: Node) -> Role {
                 Role::Reference
             }
         }
-        SyntaxKind::ExportSpecifier
-        | SyntaxKind::PropertyAssignment
-        | SyntaxKind::MethodDeclaration
-        | SyntaxKind::MethodSignature
-        | SyntaxKind::PropertyDeclaration
-        | SyntaxKind::PropertySignature
-        | SyntaxKind::GetAccessor
-        | SyntaxKind::SetAccessor
-        | SyntaxKind::EnumMember
-        | SyntaxKind::JsxAttribute
-        | SyntaxKind::NamedTupleMember => {
-            if is_name() {
+        Kind::ImportSpecifier => {
+            if parent.as_import_specifier().property_name() == Some(ident) {
                 Role::Property
-            } else {
-                Role::Reference
-            }
-        }
-        SyntaxKind::PropertyAccessExpression => {
-            if is_name() {
-                Role::Property
-            } else {
-                Role::Reference
-            }
-        }
-        SyntaxKind::QualifiedName => {
-            if first_child(parent) == Some(ident) {
-                Role::Reference
-            } else {
-                Role::Property
-            }
-        }
-        SyntaxKind::LabeledStatement => {
-            if parent.label() == ident {
+            } else if is_name() {
                 Role::Binder
             } else {
                 Role::Reference
             }
         }
-        SyntaxKind::MetaProperty => Role::Property,
+        Kind::ExportSpecifier
+        | Kind::PropertyAssignment
+        | Kind::MethodDeclaration
+        | Kind::MethodSignature
+        | Kind::PropertyDeclaration
+        | Kind::PropertySignature
+        | Kind::GetAccessor
+        | Kind::SetAccessor
+        | Kind::EnumMember
+        | Kind::JsxAttribute
+        | Kind::NamedTupleMember
+        | Kind::PropertyAccessExpression => {
+            if is_name() {
+                Role::Property
+            } else {
+                Role::Reference
+            }
+        }
+        Kind::QualifiedName => {
+            if parent.as_qualified_name().left() == ident {
+                Role::Reference
+            } else {
+                Role::Property
+            }
+        }
+        Kind::LabeledStatement => {
+            if parent.as_labeled_statement().label() == ident {
+                Role::Binder
+            } else {
+                Role::Reference
+            }
+        }
+        Kind::MetaProperty => Role::Property,
         _ => Role::Reference,
     }
 }
 
-fn first_child(node: Node) -> Option<Node> {
-    let mut first = None;
-    node.for_each_child(|child| {
-        first = Some(child);
-        true
-    });
-    first
-}
-
-fn space_of(ident: Node, parent: Node) -> Space {
+fn space_of(ident: P<Node>, parent: P<Node>) -> Space {
     match parent.kind() {
-        SyntaxKind::LabeledStatement if parent.label() == ident => Space::Label,
-        SyntaxKind::BreakStatement | SyntaxKind::ContinueStatement => Space::Label,
+        Kind::LabeledStatement if parent.as_labeled_statement().label() == ident => Space::Label,
+        Kind::BreakStatement | Kind::ContinueStatement => Space::Label,
         _ => Space::Value,
     }
 }
 
 /// Whether the declaration a binder belongs to carries `export`.
-fn declares_public_name(parents: &[Node]) -> bool {
+fn declares_public_name(parents: &[P<Node>]) -> bool {
     for node in parents.iter().rev() {
         match node.kind() {
-            SyntaxKind::VariableDeclaration
-            | SyntaxKind::VariableDeclarationList
-            | SyntaxKind::BindingElement
-            | SyntaxKind::ObjectBindingPattern
-            | SyntaxKind::ArrayBindingPattern => continue,
-            _ => return node.modifier_flags().intersects(ModifierFlags::EXPORT),
+            Kind::VariableDeclaration
+            | Kind::VariableDeclarationList
+            | Kind::BindingElement
+            | Kind::ObjectBindingPattern
+            | Kind::ArrayBindingPattern => {}
+            _ => return node.modifier_flags().intersects(ModifierFlags::Export),
         }
     }
     false
 }
 
-fn visit(node: Node, parents: &mut Vec<Node>, out: &mut Vec<Ident>) {
-    if node.kind() == SyntaxKind::Identifier {
+fn visit(node: P<Node>, parents: &mut Vec<P<Node>>, out: &mut Vec<Ident>) {
+    if node.kind() == Kind::Identifier {
         if let Some(&parent) = parents.last() {
             let text = node.text().to_owned();
-            let start = (node.end() as usize).saturating_sub(text.len());
+            let end = node.end().source_offset().unwrap_or(0) as usize;
+            let start = end.saturating_sub(text.len());
             let role = role_of(node, parent);
-            let kind =
-                match parent.kind() {
-                    SyntaxKind::ShorthandPropertyAssignment if parent.name() == node => {
-                        Occurrence::Shorthand
-                    }
-                    SyntaxKind::BindingElement
-                        if parent.name() == node
-                            && parent.property_name().is_nil()
-                            && parents.get(parents.len().wrapping_sub(2)).is_some_and(
-                                |grand| grand.kind() == SyntaxKind::ObjectBindingPattern,
-                            ) =>
-                    {
-                        Occurrence::Shorthand
-                    }
-                    SyntaxKind::ImportSpecifier if parent.property_name().is_nil() => {
-                        Occurrence::Import
-                    }
-                    _ => Occurrence::Identifier,
-                };
+            let kind = match parent.kind() {
+                Kind::ShorthandPropertyAssignment if parent.name() == Some(node) => {
+                    Occurrence::Shorthand
+                }
+                Kind::BindingElement
+                    if parent.name() == Some(node)
+                        && parent.as_binding_element().property_name().is_none()
+                        && parents
+                            .get(parents.len().wrapping_sub(2))
+                            .is_some_and(|grand| grand.kind() == Kind::ObjectBindingPattern) =>
+                {
+                    Occurrence::Shorthand
+                }
+                Kind::ImportSpecifier if parent.as_import_specifier().property_name().is_none() => {
+                    Occurrence::Import
+                }
+                _ => Occurrence::Identifier,
+            };
             out.push(Ident {
                 text,
                 start,
@@ -278,50 +285,49 @@ fn visit(node: Node, parents: &mut Vec<Node>, out: &mut Vec<Ident>) {
                 space: space_of(node, parent),
                 kind,
                 published: role == Role::Binder && declares_public_name(parents),
-                export_specifier: parent.kind() == SyntaxKind::ExportSpecifier,
+                export_specifier: parent.kind() == Kind::ExportSpecifier,
             });
         }
         return;
     }
     parents.push(node);
-    node.for_each_child(|child| {
-        if child != node {
-            visit(child, parents, out);
-        }
+    node.for_each_child_static(&mut |child| {
+        visit(child, parents, out);
         false
     });
     parents.pop();
 }
 
 fn identifiers(code: &str, tsx: bool) -> Vec<Ident> {
-    let leaked: &'static str = Box::leak(code.to_owned().into_boxed_str());
+    let region = Region::new(64 << 10);
+    let _guard = region.enter();
     let opts = SourceFileParseOptions {
         file_name: if tsx { "/hygiene.tsx" } else { "/hygiene.ts" }.to_owned(),
         ..SourceFileParseOptions::default()
     };
     let kind = if tsx { ScriptKind::TSX } else { ScriptKind::TS };
-    let file = parse_source_file(&opts, leaked, kind);
+    let file = parse_source_file_owned(opts, code.to_owned(), kind);
     let mut out = Vec::new();
     let mut parents = Vec::new();
-    visit(file.root, &mut parents, &mut out);
+    visit(file.as_node(), &mut parents, &mut out);
     out.sort_by_key(|ident| ident.start);
     out
 }
 
 /// Assign every placeholder class its printed name and rewrite `code`.
 /// Segment offsets move with the text.
-pub(crate) fn assign(code: &str, segments: &mut [Segment], tsx: bool) -> String {
+pub fn assign(code: &str, segments: &mut [Segment], tsx: bool) -> String {
     if !code.contains(PREFIX) {
         return code.to_owned();
     }
     let idents = identifiers(code, tsx);
 
     let mut order: Vec<String> = Vec::new();
-    let mut space: HashMap<String, Space> = HashMap::new();
-    let mut binders: HashSet<String> = HashSet::new();
-    let mut pinned: HashSet<String> = HashSet::new();
-    let mut unavailable: HashMap<Space, HashSet<String>> = HashMap::new();
-    let mut kinds: HashMap<usize, (Occurrence, Role)> = HashMap::new();
+    let mut space: FxHashMap<String, Space> = FxHashMap::default();
+    let mut binders: FxHashSet<String> = FxHashSet::default();
+    let mut pinned: FxHashSet<String> = FxHashSet::default();
+    let mut unavailable: FxHashMap<Space, FxHashSet<String>> = FxHashMap::default();
+    let mut kinds: FxHashMap<usize, (Occurrence, Role)> = FxHashMap::default();
     for ident in &idents {
         kinds.insert(ident.start, (ident.kind, ident.role));
         if is_placeholder(&ident.text) {
@@ -346,10 +352,7 @@ pub(crate) fn assign(code: &str, segments: &mut [Segment], tsx: bool) -> String 
         if ident.role == Role::Property {
             continue;
         }
-        unavailable
-            .entry(ident.space)
-            .or_default()
-            .insert(ident.text.clone());
+        unavailable.entry(ident.space).or_default().insert(ident.text.clone());
     }
     // A class never seen binding, or published, holds its spelling and
     // blocks it for the others.
@@ -359,8 +362,8 @@ pub(crate) fn assign(code: &str, segments: &mut [Segment], tsx: bool) -> String 
             unavailable.entry(space[key]).or_default().insert(name);
         }
     }
-    let mut names: HashMap<String, String> = HashMap::new();
-    let mut taken: HashMap<Space, HashSet<String>> = HashMap::new();
+    let mut names: FxHashMap<String, String> = FxHashMap::default();
+    let mut taken: FxHashMap<Space, FxHashSet<String>> = FxHashMap::default();
     for key in &order {
         let base = spelling(key).unwrap_or(key).to_owned();
         if pinned.contains(key) || !binders.contains(key) {
@@ -412,10 +415,8 @@ pub(crate) fn assign(code: &str, segments: &mut [Segment], tsx: bool) -> String 
         let boundary = !code[..at].chars().next_back().is_some_and(ident_char);
         let text = &code[at..end];
         if let (true, Some(name)) = (boundary, spelling(text)) {
-            let (kind, role) = kinds
-                .get(&at)
-                .copied()
-                .unwrap_or((Occurrence::Identifier, Role::Reference));
+            let (kind, role) =
+                kinds.get(&at).copied().unwrap_or((Occurrence::Identifier, Role::Reference));
             let printed = if role == Role::Property {
                 name.to_owned()
             } else {
@@ -471,108 +472,4 @@ fn ident_end(code: &str, at: usize) -> usize {
         .char_indices()
         .find(|(_, ch)| !ident_char(*ch))
         .map_or(code.len(), |(offset, _)| at + offset)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn run(code: &str) -> String {
-        assign(code, &mut [], true)
-    }
-
-    #[test]
-    fn first_occurrence_keeps_the_spelling() {
-        let a = placeholder("tmp");
-        let b = placeholder("tmp");
-        let out = run(&format!("const {a} = 1; const {b} = {a};"));
-        assert_eq!(out, "const tmp = 1; const tmp_1 = tmp;");
-    }
-
-    #[test]
-    fn user_names_block_and_properties_do_not() {
-        let a = placeholder("id");
-        let b = placeholder("x");
-        let out = run(&format!(
-            "const id = 0; obj.x; const {a} = 1; let {b} = {{ x: 1 }};"
-        ));
-        assert_eq!(
-            out,
-            "const id = 0; obj.x; const id_1 = 1; let x = { x: 1 };"
-        );
-    }
-
-    #[test]
-    fn exported_binders_keep_their_name() {
-        let a = placeholder("value");
-        let out = run(&format!("const value = 1; export const {a} = 2;"));
-        assert_eq!(out, "const value = 1; export const value = 2;");
-        let b = placeholder("v");
-        let out = run(&format!("let v; function {b}() {{}} export {{ {b} }};"));
-        assert_eq!(out, "let v; function v() {} export { v };");
-    }
-
-    #[test]
-    fn labels_are_their_own_namespace() {
-        let a = placeholder("outer");
-        let out = run(&format!("const outer = 1; {a}: for (;;) {{ break {a}; }}"));
-        assert_eq!(out, "const outer = 1; outer: for (;;) { break outer; }");
-        let b = placeholder("outer");
-        let out = run(&format!(
-            "outer: while (1) {{ {b}: for (;;) {{ continue {b}; }} }}"
-        ));
-        assert_eq!(
-            out,
-            "outer: while (1) { outer_1: for (;;) { continue outer_1; } }"
-        );
-    }
-
-    #[test]
-    fn shorthand_and_import_bindings_keep_the_property() {
-        let a = placeholder("x");
-        let out = run(&format!("let x; const {{ {a} }} = o; use({a});"));
-        assert_eq!(out, "let x; const { x: x_1 } = o; use(x_1);");
-        let b = placeholder("a");
-        let out = run(&format!("import {{ {b} }} from \"m\"; const a = {b};"));
-        assert_eq!(out, "import { a as a_1 } from \"m\"; const a = a_1;");
-    }
-
-    #[test]
-    fn jsx_text_and_attributes_are_not_names() {
-        let a = placeholder("cache");
-        let b = placeholder("className");
-        let out = run(&format!(
-            "const {a} = 1; let {b}; <div className={{{b}}}>nine cache slots</div>;"
-        ));
-        assert_eq!(
-            out,
-            "const cache = 1; let className; <div className={className}>nine cache slots</div>;"
-        );
-    }
-
-    #[test]
-    fn template_interpolations_count() {
-        let a = placeholder("n");
-        let out = run(&format!("const {a} = 1; `${{n}} ${{{a}}}`;"));
-        assert_eq!(out, "const n_1 = 1; `${n} ${n_1}`;");
-    }
-
-    #[test]
-    fn segments_move_with_the_text() {
-        let a = placeholder("t");
-        let code = format!("let {a} = 1; z;");
-        let z = code.find('z').expect("z") as u32;
-        let mut segments = [Segment {
-            virtual_start: z,
-            virtual_end: z + 1,
-            original_start: 0,
-            original_end: 1,
-            kind: crate::SegmentKind::Verbatim,
-        }];
-        let out = assign(&code, &mut segments, false);
-        assert_eq!(
-            &out[segments[0].virtual_start as usize..segments[0].virtual_end as usize],
-            "z"
-        );
-    }
 }

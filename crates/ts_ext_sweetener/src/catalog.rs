@@ -48,11 +48,7 @@ pub struct Entry {
 #[must_use]
 pub fn lookup(code: &str) -> Option<&'static Entry> {
     let code = code.trim().to_ascii_uppercase();
-    let code = if code.starts_with("SWR") {
-        code
-    } else {
-        format!("SWR{code}")
-    };
+    let code = if code.starts_with("SWR") { code } else { format!("SWR{code}") };
     CATALOG.iter().find(|entry| entry.code == code)
 }
 

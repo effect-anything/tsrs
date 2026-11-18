@@ -8,28 +8,28 @@
 //! object literal and `() => { tag: "None" }` is a block. Those are
 //! different programs.
 //!
-//! The parser is `ts_goport`. The expander's printer is not used here,
+//! The parser is `tsrs_parser`. The expander's printer is not used here,
 //! because the printer is what the two sides are being compared about.
 
 use std::fmt::Write as _;
-use ts_goport::astdata::SyntaxKind;
-use ts_goport::core::Node;
-use ts_goport::flags::ScriptKind;
-use ts_goport::frontend::parser::{SourceFileParseOptions, parse_source_file};
+use tsrs_ast::{Kind, Node, NodeFlags, SourceFileParseOptions};
+use tsrs_core::{P, ScriptKind, arena::Region};
+use tsrs_parser::parse_source_file_owned;
 
 /// A stable dump of the syntax tree. Two texts with the same dump are the
 /// same program up to formatting. `None` when the text does not parse.
 #[must_use]
 pub fn dump(text: &str, tsx: bool) -> Option<String> {
-    let leaked: &'static str = Box::leak(text.to_owned().into_boxed_str());
+    let region = Region::new(64 << 10);
+    let _guard = region.enter();
     let opts = SourceFileParseOptions {
-        file_name: "/shape.ts".to_owned(),
+        file_name: if tsx { "/shape.tsx" } else { "/shape.ts" }.to_owned(),
         ..SourceFileParseOptions::default()
     };
     let kind = if tsx { ScriptKind::TSX } else { ScriptKind::TS };
-    let file = parse_source_file(&opts, leaked, kind);
+    let file = parse_source_file_owned(opts, text.to_owned(), kind);
     let mut out = String::new();
-    write_node(file.root, 0, &mut out);
+    write_node(file.as_node(), 0, &mut out);
     Some(out)
 }
 
@@ -183,10 +183,7 @@ fn edits(left: &[&str], right: &[&str]) -> Vec<Edit> {
     out
 }
 
-fn write_node(node: Node, depth: usize, out: &mut String) {
-    if node.is_nil() {
-        return;
-    }
+fn write_node(node: P<Node>, depth: usize, out: &mut String) {
     let node = unwrap_paren(node);
     let kind = node.kind();
     // `&&` and `||` are associative. `(a && b) && c` and `a && (b && c)`
@@ -203,101 +200,134 @@ fn write_node(node: Node, depth: usize, out: &mut String) {
     }
     out.push_str(&"  ".repeat(depth));
     let _ = write!(out, "{kind:?}");
-    if node.children().nodes().is_empty() {
-        let text = node.text();
+    write_node_extra(node, out);
+    let mut children = Vec::new();
+    node.for_each_child_static(&mut |child| {
+        // A trailing comma is formatting. The module note says so; the dump
+        // used to keep `CommaToken`, so import lists differed by that comma.
+        if child.kind() != Kind::CommaToken {
+            children.push(child);
+        }
+        false
+    });
+    if children.is_empty() {
+        let text = leaf_text(node);
         if !text.is_empty() {
             out.push(' ');
             out.push_str(text);
         }
     }
     out.push('\n');
-    node.for_each_child(|child| {
-        // A trailing comma is formatting. The module note says so; the dump
-        // used to keep `CommaToken`, so import lists differed by that comma.
-        if child != node && child.kind() != SyntaxKind::CommaToken {
-            write_node(child, depth + 1, out);
-        }
-        false
-    });
-}
-
-fn unwrap_paren(node: Node) -> Node {
-    let mut current = node;
-    loop {
-        let kind = current.kind();
-        if kind != SyntaxKind::ParenthesizedExpression && kind != SyntaxKind::ParenthesizedType {
-            return current;
-        }
-        let mut inner = None;
-        current.for_each_child(|child| {
-            if child != current && inner.is_none() && !is_paren_token(child) {
-                inner = Some(child);
-            }
-            false
-        });
-        let Some(next) = inner else {
-            return current;
-        };
-        current = next;
+    for child in children {
+        write_node(child, depth + 1, out);
     }
 }
 
-fn is_paren_token(node: Node) -> bool {
-    matches!(node.text(), "(" | ")")
+fn write_node_extra(node: P<Node>, out: &mut String) {
+    match node.kind() {
+        Kind::PrefixUnaryExpression => {
+            let _ = write!(out, " {:?}", node.as_prefix_unary_expression().operator());
+        }
+        Kind::PostfixUnaryExpression => {
+            let _ = write!(out, " {:?}", node.as_postfix_unary_expression().operator());
+        }
+        Kind::TypeOperator => {
+            let _ = write!(out, " {:?}", node.as_type_operator_node().operator());
+        }
+        Kind::VariableDeclarationList => {
+            let flags = node.flags() & NodeFlags::BlockScoped;
+            let _ = write!(out, " {flags:?}");
+        }
+        Kind::HeritageClause => {
+            let _ = write!(out, " {:?}", node.as_heritage_clause().token());
+        }
+        Kind::MetaProperty => {
+            let _ = write!(out, " {:?}", node.as_meta_property().keyword_token());
+        }
+        Kind::ModuleDeclaration => {
+            let _ = write!(out, " {:?}", node.as_module_declaration().keyword());
+        }
+        Kind::ImportAttributes => {
+            let _ = write!(out, " {:?}", node.as_import_attributes().token());
+        }
+        Kind::ImportClause => {
+            let phase = node.as_import_clause().phase_modifier();
+            if phase != Kind::Unknown {
+                let _ = write!(out, " {phase:?}");
+            }
+        }
+        Kind::ImportSpecifier if node.as_import_specifier().is_type_only() => {
+            out.push_str(" type");
+        }
+        Kind::ExportDeclaration if node.as_export_declaration().is_type_only() => {
+            out.push_str(" type");
+        }
+        Kind::ExportSpecifier if node.as_export_specifier().is_type_only() => {
+            out.push_str(" type");
+        }
+        Kind::ExportAssignment if node.as_export_assignment().is_export_equals() => {
+            out.push_str(" =");
+        }
+        Kind::ImportEqualsDeclaration if node.as_import_equals_declaration().is_type_only() => {
+            out.push_str(" type");
+        }
+        Kind::ImportType if node.as_import_type_node().is_type_of() => {
+            out.push_str(" typeof");
+        }
+        _ => {}
+    }
 }
 
-fn logic_op(node: Node) -> Option<&'static str> {
+fn leaf_text(node: P<Node>) -> &'static str {
+    match node.kind() {
+        Kind::Identifier => node.as_identifier().text(),
+        Kind::PrivateIdentifier => node.as_private_identifier().text(),
+        Kind::StringLiteral => node.as_string_literal().text(),
+        Kind::NumericLiteral => node.as_numeric_literal().text(),
+        Kind::BigIntLiteral => node.as_big_int_literal().text(),
+        Kind::RegularExpressionLiteral => node.as_regular_expression_literal().text(),
+        Kind::NoSubstitutionTemplateLiteral => node.as_no_substitution_template_literal().text(),
+        Kind::TemplateHead => node.as_template_head().text(),
+        Kind::TemplateMiddle => node.as_template_middle().text(),
+        Kind::TemplateTail => node.as_template_tail().text(),
+        Kind::JsxText => node.as_jsx_text().text(),
+        _ => "",
+    }
+}
+
+fn unwrap_paren(mut node: P<Node>) -> P<Node> {
+    loop {
+        match node.kind() {
+            Kind::ParenthesizedExpression => {
+                node = node.as_parenthesized_expression().expression();
+            }
+            Kind::ParenthesizedType => {
+                node = node.as_parenthesized_type_node().type_();
+            }
+            _ => return node,
+        }
+    }
+}
+
+fn logic_op(node: P<Node>) -> Option<&'static str> {
     let node = unwrap_paren(node);
-    if node.kind() != SyntaxKind::BinaryExpression {
+    if node.kind() != Kind::BinaryExpression {
         return None;
     }
-    match node.operator_token().kind() {
-        SyntaxKind::AmpersandAmpersandToken => Some("&&"),
-        SyntaxKind::BarBarToken => Some("||"),
+    match node.as_binary_expression().operator_token().kind() {
+        Kind::AmpersandAmpersandToken => Some("&&"),
+        Kind::BarBarToken => Some("||"),
         _ => None,
     }
 }
 
-fn flatten_logic(node: Node, op: &str, operands: &mut Vec<Node>) {
+fn flatten_logic(node: P<Node>, op: &str, operands: &mut Vec<P<Node>>) {
     let node = unwrap_paren(node);
     if logic_op(node) == Some(op) {
-        flatten_logic(node.left(), op, operands);
-        flatten_logic(node.right(), op, operands);
+        let bin = node.as_binary_expression();
+        flatten_logic(bin.left(), op, operands);
+        flatten_logic(bin.right(), op, operands);
         return;
     }
     operands.push(node);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{same, unified};
-
-    #[test]
-    fn parentheses_are_shape_and_a_block_is_not_an_object() {
-        assert!(same(
-            "const f = () => (a && b) && c\n",
-            "const f = () => a && (b && c)\n",
-            false
-        ));
-        assert!(same(
-            "const f = () => (a + b)\n",
-            "const f = () => a + b\n",
-            false
-        ));
-        assert!(!same(
-            "const f = () => ({ tag: \"None\" })\n",
-            "const f = () => { tag: \"None\" }\n",
-            false
-        ));
-    }
-
-    #[test]
-    fn the_diff_names_the_files_and_not_a_temp_directory() {
-        let text = unified("a\nb\n", "a\nc\n");
-        assert!(text.starts_with("--- theirs.ts\n+++ ours.ts\n"), "{text}");
-        assert!(!text.contains("/var/"), "{text}");
-        assert!(!text.contains("2026-"), "{text}");
-        assert!(text.contains("-b\n"), "{text}");
-        assert!(text.contains("+c\n"), "{text}");
-    }
 }

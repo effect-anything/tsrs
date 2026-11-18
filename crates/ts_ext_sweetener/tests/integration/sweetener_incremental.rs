@@ -5,14 +5,7 @@
 use ts_ext_sweetener::{ExpandRequest, Expansion, Phase, expand_uncached, incremental_stats};
 
 fn run(filename: &str, code: &str, incremental: bool) -> Expansion {
-    expand_uncached(
-        ExpandRequest {
-            filename,
-            code,
-            phase: Phase::Check,
-        },
-        incremental,
-    )
+    expand_uncached(ExpandRequest { filename, code, phase: Phase::Check }, incremental)
 }
 
 /// A small deterministic generator, so a failure names its seed.
@@ -20,10 +13,8 @@ struct Rng(u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 =
+            self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         self.0 >> 33
     }
 
@@ -46,26 +37,17 @@ fn edit(code: &str, rng: &mut Rng, serial: usize) -> (String, String) {
         return (format!("{code}\n// e{serial}\n"), "append".to_owned());
     }
     let line = starts[rng.below(starts.len())];
-    let line_end = code[line..]
-        .find('\n')
-        .map_or(code.len(), |at| line + at + 1);
+    let line_end = code[line..].find('\n').map_or(code.len(), |at| line + at + 1);
     match rng.below(7) {
         0 => (
             format!("{}/*e{serial}*/ {}", &code[..line], &code[line..]),
             format!("comment at {line}"),
         ),
-        1 => (
-            format!("{}\n{}", &code[..line], &code[line..]),
-            format!("blank line at {line}"),
-        ),
-        2 => (
-            format!("{}{}", &code[..line], &code[line_end..]),
-            format!("delete line at {line}"),
-        ),
-        3 => (
-            format!("{}{}", &code[..line_end], &code[line..]),
-            format!("duplicate line at {line}"),
-        ),
+        1 => (format!("{}\n{}", &code[..line], &code[line..]), format!("blank line at {line}")),
+        2 => (format!("{}{}", &code[..line], &code[line_end..]), format!("delete line at {line}")),
+        3 => {
+            (format!("{}{}", &code[..line_end], &code[line..]), format!("duplicate line at {line}"))
+        }
         4 => {
             // Change one letter of a word.
             let letters: Vec<usize> = code
@@ -78,31 +60,18 @@ fn edit(code: &str, rng: &mut Rng, serial: usize) -> (String, String) {
             }
             let at = letters[rng.below(letters.len())];
             let ch = (b'a' + rng.below(26) as u8) as char;
-            (
-                format!("{}{ch}{}", &code[..at], &code[at + 1..]),
-                format!("letter {ch} at {at}"),
-            )
+            (format!("{}{ch}{}", &code[..at], &code[at + 1..]), format!("letter {ch} at {at}"))
         }
         5 => (
-            format!(
-                "{}const e{serial} = {serial};\n{}",
-                &code[..line],
-                &code[line..]
-            ),
+            format!("{}const e{serial} = {serial};\n{}", &code[..line], &code[line..]),
             format!("statement at {line}"),
         ),
         _ => {
             // Type a character in the middle of a line.
             let at = line + rng.below(line_end - line);
-            let at = (0..=at)
-                .rev()
-                .find(|at| code.is_char_boundary(*at))
-                .unwrap_or(0);
+            let at = (0..=at).rev().find(|at| code.is_char_boundary(*at)).unwrap_or(0);
             let ch = [' ', ';', '(', ')', 'x', '{', '}', '<', '>', '1'][rng.below(10)];
-            (
-                format!("{}{ch}{}", &code[..at], &code[at..]),
-                format!("type {ch:?} at {at}"),
-            )
+            (format!("{}{ch}{}", &code[..at], &code[at..]), format!("type {ch:?} at {at}"))
         }
     }
 }
@@ -123,11 +92,7 @@ fn first_difference(a: &str, b: &str) -> String {
 fn check_edits(filename: &str, code: &str, seed: u64, edits: usize) {
     let mut rng = Rng(seed);
     let mut code = code.to_owned();
-    assert_eq!(
-        run(filename, &code, true),
-        run(filename, &code, false),
-        "{filename}: unedited"
-    );
+    assert_eq!(run(filename, &code, true), run(filename, &code, false), "{filename}: unedited");
     for serial in 0..edits {
         let (edited, what) = edit(&code, &mut rng, serial);
         let incremental = run(filename, &edited, true);
@@ -148,15 +113,10 @@ fn check_edits(filename: &str, code: &str, seed: u64, edits: usize) {
                 incremental.origins == full.origins,
                 incremental.diagnostics,
                 full.diagnostics,
-                incremental
-                    .traces
-                    .iter()
-                    .zip(&full.traces)
-                    .find(|(a, b)| a != b)
-                    .map_or_else(
-                        || format!("lengths {} {}", incremental.traces.len(), full.traces.len()),
-                        |pair| format!("{pair:?}")
-                    ),
+                incremental.traces.iter().zip(&full.traces).find(|(a, b)| a != b).map_or_else(
+                    || format!("lengths {} {}", incremental.traces.len(), full.traces.len()),
+                    |pair| format!("{pair:?}")
+                ),
             );
         }
         code = edited;
@@ -184,24 +144,17 @@ fn every_case_expands_the_same_incrementally_after_random_edits() {
     let cases = cases();
     assert!(cases.len() > 50, "{}", cases.len());
     // `SWEETENER_FUZZ_EDITS=<n>` runs longer chains.
-    let edits = std::env::var("SWEETENER_FUZZ_EDITS")
-        .ok()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(6);
-    let seed: u64 = std::env::var("SWEETENER_FUZZ_SEED")
-        .ok()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(0x5eed);
+    let edits =
+        std::env::var("SWEETENER_FUZZ_EDITS").ok().and_then(|n| n.parse().ok()).unwrap_or(6);
+    let seed: u64 =
+        std::env::var("SWEETENER_FUZZ_SEED").ok().and_then(|n| n.parse().ok()).unwrap_or(0x5eed);
     for (index, (filename, code)) in cases.iter().enumerate() {
         check_edits(filename, code, seed + index as u64, edits);
     }
 }
 
 fn bench_file() -> (String, String) {
-    let file = format!(
-        "{}/../../ext/bench/fixture/bench.stsx",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let file = format!("{}/../../ext/bench/fixture/bench.stsx", env!("CARGO_MANIFEST_DIR"));
     let code = std::fs::read_to_string(&file).unwrap();
     (file, code)
 }
@@ -233,10 +186,8 @@ fn random_edits_of_bench_expand_the_same_incrementally() {
         }
         Err(_) => bench_file(),
     };
-    let seeds: u64 = std::env::var("SWEETENER_FUZZ_SEEDS")
-        .ok()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(4);
+    let seeds: u64 =
+        std::env::var("SWEETENER_FUZZ_SEEDS").ok().and_then(|n| n.parse().ok()).unwrap_or(4);
     for seed in 0..seeds {
         check_edits(&file, &code, 0xbe7c + seed, 12);
     }

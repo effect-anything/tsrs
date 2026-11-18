@@ -1,5 +1,5 @@
 //! Write `ours.ts` next to each captured `theirs.ts`. Does not overwrite
-//! `theirs.ts`. Comparison is this crate's syntax tree, not TypeGPU's.
+//! `theirs.ts`. Comparison is this crate's syntax tree, not `TypeGPU`'s.
 //!
 //! `cargo run -q -p ts_ext_sweetener --example capture_ours -- --all`
 //! `cargo run -q -p ts_ext_sweetener --example capture_ours -- fixtures-acceptance`
@@ -33,10 +33,7 @@ fn main() {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("");
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
         if !path.is_dir() || (!prefix.is_empty() && !name.starts_with(&prefix)) {
             continue;
         }
@@ -97,16 +94,8 @@ enum Same {
 fn capture(dir: &Path, theirs: &Path) -> Result<Same, String> {
     let input = input_file(dir).ok_or_else(|| "no input".to_string())?;
     let code = fs::read_to_string(&input).map_err(|err| err.to_string())?;
-    let filename = input
-        .canonicalize()
-        .unwrap_or(input.clone())
-        .to_string_lossy()
-        .into_owned();
-    let expansion = expand(ExpandRequest {
-        filename: &filename,
-        code: &code,
-        phase: Phase::Check,
-    });
+    let filename = input.canonicalize().unwrap_or(input.clone()).to_string_lossy().into_owned();
+    let expansion = expand(ExpandRequest { filename: &filename, code: &code, phase: Phase::Check });
     fs::write(snapshot_path(dir, "ours"), &expansion.code).map_err(|err| err.to_string())?;
     let reference = fs::read_to_string(theirs).map_err(|err| err.to_string())?;
     if collapse(&reference) == collapse(&expansion.code) {

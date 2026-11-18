@@ -29,9 +29,9 @@
 //! would. The final hygiene and hoist passes still run over the whole
 //! output, as before.
 
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
+use tsrs_core::collections::{OrderedMap, OrderedSet};
 
 use super::{
     ACTIVE_EXPANSIONS, BUDGET, CURRENT_INVOCATION, Diagnostic, IMPORT_OWNERS, INVOKED_OWNERS,
@@ -52,10 +52,10 @@ const LOOK_AHEAD: usize = 64;
 /// records each question and its answer, so it is replayed only where every
 /// answer is the same.
 #[derive(Clone, Debug, Default)]
-pub(super) struct UserNames {
-    set: std::collections::HashSet<String>,
+pub struct UserNames {
+    set: OrderedSet<String>,
     /// Names inserted after the pass started, in order (with repeats).
-    added: Vec<String>,
+    pub added: Vec<String>,
 }
 
 thread_local! {
@@ -63,15 +63,20 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+pub fn start_name_log() {
+    NAME_LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
+}
+
+pub fn take_name_log() -> Option<Vec<(String, bool)>> {
+    NAME_LOG.with(|log| log.borrow_mut().take())
+}
+
 impl UserNames {
-    pub(super) fn new(set: std::collections::HashSet<String>) -> Self {
-        Self {
-            set,
-            added: Vec::new(),
-        }
+    pub fn new(set: OrderedSet<String>) -> Self {
+        Self { set, added: Vec::new() }
     }
 
-    pub(super) fn contains(&self, name: &str) -> bool {
+    pub fn contains(&self, name: &str) -> bool {
         let found = self.set.contains(name);
         NAME_LOG.with(|log| {
             if let Some(log) = log.borrow_mut().as_mut() {
@@ -83,14 +88,13 @@ impl UserNames {
 
     /// Every insert is logged, a name already there too: a replayed item
     /// inserts it again where an earlier item no longer did.
-    pub(super) fn insert(&mut self, name: String) {
+    pub fn insert(&mut self, name: String) {
         self.set.insert(name.clone());
         self.added.push(name);
     }
 
-    fn answers(&self, log: &[(String, bool)]) -> bool {
-        log.iter()
-            .all(|(name, found)| self.set.contains(name) == *found)
+    pub fn answers(&self, log: &[(String, bool)]) -> bool {
+        log.iter().all(|(name, found)| self.set.contains(name) == *found)
     }
 }
 
@@ -111,9 +115,9 @@ struct State {
     remembered: Vec<(String, String)>,
 }
 
-fn sorted(map: &HashMap<String, String>) -> Vec<(String, String)> {
+fn sorted<'a>(map: impl IntoIterator<Item = (&'a String, &'a String)>) -> Vec<(String, String)> {
     let mut entries: Vec<(String, String)> =
-        map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        map.into_iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     entries.sort();
     entries
 }
@@ -156,7 +160,7 @@ impl State {
 /// a placeholder. Hashed in place: most items are replayed, and only a
 /// printed one keeps its state (`State::take`).
 fn state_hash(printer: &Printer<'_>, at: usize, index: usize) -> Option<u64> {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = DefaultHasher::new();
     let hygiene = sorted(&printer.hygiene);
     let renames = sorted(&printer.channel_renames);
     let remembered = sorted(&crate::sweetener_hygiene::remembered());
@@ -211,10 +215,7 @@ fn quiet(recorder: &mut Recorder, printer: &Printer<'_>) -> bool {
     let placed = TRACES.with(|traces| {
         let traces = traces.borrow();
         let from = recorder.traces_placed.min(traces.len());
-        let more = traces[from..]
-            .iter()
-            .take_while(|(_, level)| *level == Some(0))
-            .count();
+        let more = traces[from..].iter().take_while(|(_, level)| *level == Some(0)).count();
         recorder.traces_placed = from + more;
         recorder.traces_placed == traces.len()
     });
@@ -278,14 +279,14 @@ struct Logged {
 struct Log {
     fingerprint: u64,
     source: Arc<str>,
-    items: HashMap<usize, Logged>,
+    items: OrderedMap<usize, Logged>,
 }
 
 type Slot = (String, u64);
 
-fn logs() -> &'static Mutex<HashMap<Slot, Arc<Log>>> {
-    static LOGS: OnceLock<Mutex<HashMap<Slot, Arc<Log>>>> = OnceLock::new();
-    LOGS.get_or_init(|| Mutex::new(HashMap::new()))
+fn logs() -> &'static Mutex<OrderedMap<Slot, Arc<Log>>> {
+    static LOGS: OnceLock<Mutex<OrderedMap<Slot, Arc<Log>>>> = OnceLock::new();
+    LOGS.get_or_init(|| Mutex::new(OrderedMap::default()))
 }
 
 /// Logs of at most this many passes are kept; an editor works on a few files.
@@ -315,10 +316,11 @@ static HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::ne
 static PRINTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 pub(crate) fn stats() -> (usize, usize) {
-    (
-        HITS.load(std::sync::atomic::Ordering::Relaxed),
-        PRINTED.load(std::sync::atomic::Ordering::Relaxed),
-    )
+    // Relaxed: diagnostic counters only; exact cross-thread ordering is not required.
+    let hits = HITS.load(std::sync::atomic::Ordering::Relaxed);
+    // Relaxed: diagnostic counters only; exact cross-thread ordering is not required.
+    let printed = PRINTED.load(std::sync::atomic::Ordering::Relaxed);
+    (hits, printed)
 }
 
 /// Whether incremental expansion is off (`SWEETENER_NO_INCREMENTAL=1`).
@@ -332,29 +334,20 @@ fn disabled() -> bool {
 /// The one range of the old text an edit replaced: the old text and the
 /// new one share `prefix` bytes at the start and `suffix` at the end.
 #[derive(Clone, Copy, Debug)]
-struct Edit {
-    prefix: usize,
-    old_end: usize,
-    new_end: usize,
+pub struct Edit {
+    pub prefix: usize,
+    pub old_end: usize,
+    pub new_end: usize,
 }
 
 impl Edit {
-    fn between(old: &str, new: &str) -> Edit {
+    pub fn between(old: &str, new: &str) -> Edit {
         let (a, b) = (old.as_bytes(), new.as_bytes());
         let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
         let room = a.len().min(b.len()) - prefix;
-        let suffix = a
-            .iter()
-            .rev()
-            .zip(b.iter().rev())
-            .take(room)
-            .take_while(|(x, y)| x == y)
-            .count();
-        Edit {
-            prefix,
-            old_end: a.len() - suffix,
-            new_end: b.len() - suffix,
-        }
+        let suffix =
+            a.iter().rev().zip(b.iter().rev()).take(room).take_while(|(x, y)| x == y).count();
+        Edit { prefix, old_end: a.len() - suffix, new_end: b.len() - suffix }
     }
 
     fn delta(self) -> i64 {
@@ -363,7 +356,7 @@ impl Edit {
 
     /// A position of the old text in the new one; `None` in or at the edges
     /// of the replaced range.
-    fn forward(self, old: usize) -> Option<usize> {
+    pub fn forward(self, old: usize) -> Option<usize> {
         if old < self.prefix {
             Some(old)
         } else if old > self.old_end {
@@ -374,7 +367,7 @@ impl Edit {
     }
 
     /// A position of the new text in the old one.
-    fn backward(self, new: usize) -> Option<usize> {
+    pub fn backward(self, new: usize) -> Option<usize> {
         if new < self.prefix {
             Some(new)
         } else if new > self.new_end {
@@ -386,7 +379,7 @@ impl Edit {
 
     /// How a whole old range moves: unchanged before the edit, shifted
     /// after it. `None` when it touches the edit.
-    fn range_shift(self, (start, end): (usize, usize)) -> Option<i64> {
+    pub fn range_shift(self, (start, end): (usize, usize)) -> Option<i64> {
         if end <= self.prefix {
             Some(0)
         } else if start >= self.old_end && (start > self.prefix || self.old_end > self.prefix) {
@@ -421,21 +414,21 @@ pub(super) struct Recorder {
     /// macro), hashed once per generation.
     generation: (u32, u64),
     /// Where the rules this file defines start.
-    file_rules: std::collections::HashSet<u32>,
-    items: HashMap<usize, Logged>,
+    file_rules: OrderedSet<u32>,
+    items: OrderedMap<usize, Logged>,
     hits: usize,
     printed: usize,
     /// Why items were not replayed, when `SWEETENER_ITEMS_DEBUG` is set.
-    misses: HashMap<&'static str, usize>,
+    misses: OrderedMap<&'static str, usize>,
 }
 
 /// `hash_debug` of each element, in an order that does not depend on the
 /// list's: the imported macros come out of a map.
-fn hash_debug_set<T: std::fmt::Debug>(values: &[T], hasher: &mut impl Hasher) {
+pub fn hash_debug_set<T: std::fmt::Debug>(values: &[T], hasher: &mut impl Hasher) {
     let mut each: Vec<u64> = values
         .iter()
         .map(|value| {
-            let mut one = std::collections::hash_map::DefaultHasher::new();
+            let mut one = DefaultHasher::new();
             hash_debug(value, &mut one);
             one.finish()
         })
@@ -448,7 +441,7 @@ fn hash_debug_set<T: std::fmt::Debug>(values: &[T], hasher: &mut impl Hasher) {
 /// `start`, `end` and `at` of a local definition move with any edit above
 /// it. An item's output carries such a position only as a position, which
 /// the replay moves by the edit, or as an order, which the key holds.
-fn hash_debug(value: &impl std::fmt::Debug, hasher: &mut impl Hasher) {
+pub fn hash_debug(value: &impl std::fmt::Debug, hasher: &mut impl Hasher) {
     use std::fmt::Write;
     let mut text = String::new();
     let _ = write!(text, "{value:?}");
@@ -477,7 +470,7 @@ impl Recorder {
             return None;
         }
         let nodes = printer.file_nodes;
-        let mut kind = std::collections::hash_map::DefaultHasher::new();
+        let mut kind = DefaultHasher::new();
         pass.hash(&mut kind);
         let filter = OWNER_FILTER.with(|filter| {
             filter.borrow().as_ref().map(|set| {
@@ -488,7 +481,7 @@ impl Recorder {
         });
         filter.hash(&mut kind);
         let slot = (filename.to_owned(), kind.finish());
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = DefaultHasher::new();
         env!("CARGO_PKG_VERSION").hash(&mut hasher);
         filename.hash(&mut hasher);
         format!("{phase:?}").hash(&mut hasher);
@@ -505,12 +498,8 @@ impl Recorder {
             SYNTAX_PARAMETERS.with(|set| set.borrow().iter().cloned().collect());
         parameters.sort();
         parameters.hash(&mut hasher);
-        let mut unknown: Vec<(String, String)> = UNKNOWN_PARAMETERIZED.with(|map| {
-            map.borrow()
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        });
+        let mut unknown: Vec<(String, String)> = UNKNOWN_PARAMETERIZED
+            .with(|map| map.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect());
         unknown.sort();
         unknown.hash(&mut hasher);
         let mut owners: Vec<String> =
@@ -518,29 +507,17 @@ impl Recorder {
         owners.sort();
         owners.hash(&mut hasher);
         let mut heads: Vec<(usize, String)> = LOCAL_HEADS.with(|heads| {
-            heads
-                .borrow()
-                .iter()
-                .map(|(name, at)| (*at as usize, name.clone()))
-                .collect()
+            heads.borrow().iter().map(|(name, at)| (*at as usize, name.clone())).collect()
         });
         heads.sort();
-        heads
-            .iter()
-            .map(|(_, name)| name)
-            .collect::<Vec<_>>()
-            .hash(&mut hasher);
+        heads.iter().map(|(_, name)| name).collect::<Vec<_>>().hash(&mut hasher);
         let fingerprint = hasher.finish();
 
         let source: Arc<str> = Arc::from(printer.source);
-        let previous = logs()
-            .lock()
-            .ok()
-            .and_then(|logs| logs.get(&slot).cloned())
-            .map(|log| {
-                let edit = Edit::between(&log.source, &source);
-                (log, edit)
-            });
+        let previous = logs().lock().ok().and_then(|logs| logs.get(&slot).cloned()).map(|log| {
+            let edit = Edit::between(&log.source, &source);
+            (log, edit)
+        });
 
         let mut jsx = vec![0i32; nodes.len() + 1];
         {
@@ -599,10 +576,10 @@ impl Recorder {
                 .filter(|rule| rule.owner.is_none())
                 .filter_map(|rule| rule.origin.map(|span| span.start))
                 .collect(),
-            items: HashMap::new(),
+            items: OrderedMap::default(),
             hits: 0,
             printed: 0,
-            misses: HashMap::new(),
+            misses: OrderedMap::default(),
         });
         recorder.index_regions();
         Some(recorder)
@@ -636,7 +613,7 @@ impl Recorder {
     }
 
     fn key(&self, state: u64, nodes: &[Syntax], index: usize, window: (usize, usize)) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = DefaultHasher::new();
         state.hash(&mut hasher);
         self.fingerprint.hash(&mut hasher);
         let at = super::node_start(&nodes[index]);
@@ -655,9 +632,7 @@ impl Recorder {
         }
         // The regions overlapping the window: those starting before its
         // end, back to where no earlier one reaches into it.
-        let upto = self
-            .by_start
-            .partition_point(|(start, _, _)| *start < window.1);
+        let upto = self.by_start.partition_point(|(start, _, _)| *start < window.1);
         let mut at = upto;
         while at > 0 && self.reach[at] > window.0 {
             at -= 1;
@@ -685,7 +660,7 @@ pub(super) fn step(printer: &mut Printer<'_>, nodes: &[Syntax], index: usize) ->
 /// The hash of the printer's macros and classes when an item changed them.
 fn generation_hash(recorder: &mut Recorder, printer: &Printer<'_>) -> u64 {
     if printer.macro_generation != recorder.generation.0 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = DefaultHasher::new();
         hash_debug_set(&printer.macros, &mut hasher);
         hash_debug_set(&printer.classes, &mut hasher);
         recorder.generation = (printer.macro_generation, hasher.finish());
@@ -702,11 +677,7 @@ fn run(
     let at = super::node_start(&nodes[index]);
     let generation = printer.macro_generation;
     let macros = generation_hash(recorder, printer);
-    let state = if quiet(recorder, printer) {
-        state_hash(printer, at, index)
-    } else {
-        None
-    };
+    let state = if quiet(recorder, printer) { state_hash(printer, at, index) } else { None };
     let counters = crate::sweetener_budget::counters();
     let (Some(state), Some(counters)) = (state, counters) else {
         *recorder.misses.entry("busy state").or_default() += 1;
@@ -738,9 +709,7 @@ fn run(
     let added_len = printer.user_names.added.len();
     NAME_LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
     let next = printer.print_step(nodes, index);
-    let names = NAME_LOG
-        .with(|log| log.borrow_mut().take())
-        .unwrap_or_default();
+    let names = NAME_LOG.with(|log| log.borrow_mut().take()).unwrap_or_default();
     let invoked: Vec<String> = INVOKED_OWNERS.with(|set| {
         let mut set = set.borrow_mut();
         let mine: Vec<String> = set.iter().cloned().collect();
@@ -767,10 +736,9 @@ fn run(
     // A verbatim copy that continued the segment before the item is the
     // item's own first segment, merged again on replay.
     let mut segments: Vec<Segment> = printer.segments[segments_len..].to_vec();
-    if let (Some(was), Some(now)) = (
-        &last_segment,
-        printer.segments.get(segments_len.wrapping_sub(1)),
-    ) && (was.virtual_end != now.virtual_end || was.original_end != now.original_end)
+    if let (Some(was), Some(now)) =
+        (&last_segment, printer.segments.get(segments_len.wrapping_sub(1)))
+        && (was.virtual_end != now.virtual_end || was.original_end != now.original_end)
     {
         segments.insert(
             0,
@@ -790,27 +758,15 @@ fn run(
     }
     let out = printer.out[out_len..].to_owned();
     let traces: Vec<crate::ExpansionTrace> = TRACES.with(|traces| {
-        traces.borrow()[traces_len..]
-            .iter()
-            .map(|(trace, _)| trace.clone())
-            .collect()
+        traces.borrow()[traces_len..].iter().map(|(trace, _)| trace.clone()).collect()
     });
     let diagnostics = printer.diagnostics[diagnostics_len..].to_vec();
     let diagnostic_in_file: Vec<bool> = (diagnostics_len..printer.diagnostics.len())
-        .map(|at| {
-            !printer
-                .nested_diagnostics
-                .iter()
-                .any(|(from, to)| (*from..*to).contains(&at))
-        })
+        .map(|at| !printer.nested_diagnostics.iter().any(|(from, to)| (*from..*to).contains(&at)))
         .collect();
     let rule_in_file: Vec<bool> = traces
         .iter()
-        .map(|trace| {
-            trace
-                .rule_start
-                .is_some_and(|start| recorder.file_rules.contains(&start))
-        })
+        .map(|trace| trace.rule_start.is_some_and(|start| recorder.file_rules.contains(&start)))
         .collect();
     // With rules a definition made, a start could be either kind.
     if printer.macro_generation > 0 && rule_in_file.iter().any(|in_file| *in_file) {
@@ -842,11 +798,7 @@ fn run(
                 .flat_map(|(d, _)| [d.start, d.end]),
         )
         .map(|pos| pos as usize)
-        .chain(
-            printer.consumed[consumed_len..]
-                .iter()
-                .flat_map(|c| [c.0, c.1]),
-        )
+        .chain(printer.consumed[consumed_len..].iter().flat_map(|c| [c.0, c.1]))
         .chain([after.last_original])
         .any(|pos| !inside(pos))
         || diagnostics
@@ -864,9 +816,8 @@ fn run(
         }
     }
     let mut charges = [0u64; 5];
-    for (slot, (now, was)) in charges
-        .iter_mut()
-        .zip(after_counters.used.iter().zip(counters.used.iter()))
+    for (slot, (now, was)) in
+        charges.iter_mut().zip(after_counters.used.iter().zip(counters.used.iter()))
     {
         *slot = now - was;
     }
@@ -897,26 +848,17 @@ fn run(
         regions,
         probes,
     };
-    recorder.items.insert(
-        at,
-        Logged {
-            item: Arc::new(item),
-            shift: 0,
-        },
-    );
+    recorder.items.insert(at, Logged { item: Arc::new(item), shift: 0 });
     next
 }
 
 /// `<prefix><digits><end>` ids in `text`.
-fn placeholder_ids(text: &str, prefix: &str, end: u8) -> Vec<usize> {
+pub fn placeholder_ids(text: &str, prefix: &str, end: u8) -> Vec<usize> {
     let mut ids = Vec::new();
     let mut from = 0;
     while let Some(found) = text[from..].find(prefix) {
         let digits_at = from + found + prefix.len();
-        let digits = text.as_bytes()[digits_at..]
-            .iter()
-            .take_while(|b| b.is_ascii_digit())
-            .count();
+        let digits = text.as_bytes()[digits_at..].iter().take_while(|b| b.is_ascii_digit()).count();
         if digits > 0
             && text.as_bytes().get(digits_at + digits) == Some(&end)
             && let Ok(id) = text[digits_at..digits_at + digits].parse()
@@ -930,7 +872,7 @@ fn placeholder_ids(text: &str, prefix: &str, end: u8) -> Vec<usize> {
 
 /// `text` with every placeholder id replaced by a fresh one (the same old
 /// id, the same new one), and how far each old offset moved.
-fn renumber(
+pub fn renumber(
     text: &str,
     regions: &[(usize, (String, String, bool))],
 ) -> (String, Vec<(usize, i64)>) {
@@ -939,8 +881,8 @@ fn renumber(
     if !text.contains(hygiene) && !text.contains(scoped) {
         return (text.to_owned(), Vec::new());
     }
-    let mut fresh_h: HashMap<usize, usize> = HashMap::new();
-    let mut fresh_p: HashMap<usize, usize> = HashMap::new();
+    let mut fresh_h: OrderedMap<usize, usize> = OrderedMap::default();
+    let mut fresh_p: OrderedMap<usize, usize> = OrderedMap::default();
     let mut out = String::with_capacity(text.len() + 16);
     let mut moves = Vec::new();
     let mut shift = 0i64;
@@ -957,10 +899,7 @@ fn renumber(
             continue;
         };
         let digits_at = index + prefix.len();
-        let digits = bytes[digits_at..]
-            .iter()
-            .take_while(|b| b.is_ascii_digit())
-            .count();
+        let digits = bytes[digits_at..].iter().take_while(|b| b.is_ascii_digit()).count();
         let id = (digits > 0 && bytes.get(digits_at + digits) == Some(&end))
             .then(|| text[digits_at..digits_at + digits].parse::<usize>().ok())
             .flatten();
@@ -978,9 +917,7 @@ fn renumber(
                 crate::sweetener_scoped::renumber_region(header)
             })
         } else {
-            *fresh_h
-                .entry(id)
-                .or_insert_with(crate::sweetener_hygiene::fresh_id)
+            *fresh_h.entry(id).or_insert_with(crate::sweetener_hygiene::fresh_id)
         };
         out.push_str(&text[copied..digits_at]);
         let printed = new.to_string();
@@ -994,7 +931,7 @@ fn renumber(
     (out, moves)
 }
 
-fn moved(moves: &[(usize, i64)], at: u32) -> u32 {
+pub fn moved(moves: &[(usize, i64)], at: u32) -> u32 {
     let shift = moves
         .iter()
         .take_while(|(end, _)| *end <= at as usize)
@@ -1003,7 +940,6 @@ fn moved(moves: &[(usize, i64)], at: u32) -> u32 {
     (at as i64 + shift) as u32
 }
 
-#[allow(clippy::too_many_arguments)]
 fn replay(
     recorder: &mut Recorder,
     printer: &mut Printer<'_>,
@@ -1051,12 +987,7 @@ fn replay(
     if !printer.user_names.answers(&item.names) {
         return miss(recorder, "names");
     }
-    for ((used, charge), limit) in counters
-        .used
-        .iter()
-        .zip(&item.charges)
-        .zip(&counters.limits)
-    {
+    for ((used, charge), limit) in counters.used.iter().zip(&item.charges).zip(&counters.limits) {
         if used.saturating_add(*charge) > *limit {
             return miss(recorder, "budget");
         }
@@ -1102,15 +1033,9 @@ fn replay(
         }
         printer.segments.push(segment);
     }
-    printer
-        .fine
-        .extend(item.fine.iter().map(|(start, end, source)| {
-            (
-                base + moved(&moves, *start),
-                base + moved(&moves, *end),
-                m32(*source),
-            )
-        }));
+    printer.fine.extend(item.fine.iter().map(|(start, end, source)| {
+        (base + moved(&moves, *start), base + moved(&moves, *end), m32(*source))
+    }));
     for (diagnostic, in_file) in item.diagnostics.iter().zip(&item.diagnostic_in_file) {
         let mut diagnostic = diagnostic.clone();
         if *in_file {
@@ -1137,8 +1062,7 @@ fn replay(
         })
         .collect();
     TRACES.with(|all| {
-        all.borrow_mut()
-            .extend(traces.iter().cloned().map(|trace| (trace, Some(0))));
+        all.borrow_mut().extend(traces.iter().cloned().map(|trace| (trace, Some(0))));
     });
     INVOKED_OWNERS.with(|set| set.borrow_mut().extend(item.invoked.iter().cloned()));
     if !item.unused.is_empty() {
@@ -1152,10 +1076,7 @@ fn replay(
     let after = &item.after;
     printer.last_original = moved_by(after.last_original);
     if printer.hygiene.len() != after.hygiene.len()
-        || after
-            .hygiene
-            .iter()
-            .any(|(k, v)| printer.hygiene.get(k) != Some(v))
+        || after.hygiene.iter().any(|(k, v)| printer.hygiene.get(k) != Some(v))
     {
         printer.hygiene = after.hygiene.iter().cloned().collect();
     }
@@ -1189,10 +1110,7 @@ fn replay(
         for piece in &mut moved_item.fine {
             piece.2 = m32(piece.2);
         }
-        for (diagnostic, in_file) in moved_item
-            .diagnostics
-            .iter_mut()
-            .zip(&item.diagnostic_in_file)
+        for (diagnostic, in_file) in moved_item.diagnostics.iter_mut().zip(&item.diagnostic_in_file)
         {
             if *in_file {
                 diagnostic.start = m32(diagnostic.start);
@@ -1204,15 +1122,9 @@ fn replay(
             consumed.1 = moved_by(consumed.1);
         }
         moved_item.traces = traces;
-        Logged {
-            item: Arc::new(moved_item),
-            shift: 0,
-        }
+        Logged { item: Arc::new(moved_item), shift: 0 }
     } else {
-        Logged {
-            item: logged.item.clone(),
-            shift,
-        }
+        Logged { item: logged.item.clone(), shift }
     };
     recorder.items.insert(at, relogged);
     Some(next)
@@ -1220,37 +1132,20 @@ fn replay(
 
 /// Keep the log of the pass `recorder` watched, for the next expansion.
 pub(super) fn finish(recorder: Box<Recorder>) {
-    let Recorder {
-        slot,
-        fingerprint,
-        source,
-        previous,
-        items,
-        hits,
-        printed,
-        misses,
-        ..
-    } = *recorder;
+    let Recorder { slot, fingerprint, source, previous, items, hits, printed, misses, .. } =
+        *recorder;
     if std::env::var_os("SWEETENER_ITEMS_DEBUG").is_some() {
-        eprintln!(
-            "items {}: {hits} replayed, {printed} printed, misses {misses:?}",
-            slot.0
-        );
+        eprintln!("items {}: {hits} replayed, {printed} printed, misses {misses:?}", slot.0);
     }
+    // Relaxed: diagnostic counters only; exact cross-thread ordering is not required.
     HITS.fetch_add(hits, std::sync::atomic::Ordering::Relaxed);
+    // Relaxed: diagnostic counters only; exact cross-thread ordering is not required.
     PRINTED.fetch_add(printed, std::sync::atomic::Ordering::Relaxed);
     let replaced = logs().lock().ok().and_then(|mut logs| {
         if logs.len() >= MAX_LOGS && !logs.contains_key(&slot) {
             logs.clear();
         }
-        logs.insert(
-            slot,
-            Arc::new(Log {
-                fingerprint,
-                source,
-                items,
-            }),
-        )
+        logs.insert(slot, Arc::new(Log { fingerprint, source, items }))
     });
     // The log this one replaces is the editor's last version: freeing a
     // large one is not the edit's work.
@@ -1259,126 +1154,5 @@ pub(super) fn finish(recorder: Box<Recorder>) {
         let _ = std::thread::Builder::new()
             .name("sweetener-log-free".to_owned())
             .spawn(move || drop((replaced, previous)));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_edit_moves_what_follows_it_and_nothing_inside_it() {
-        let edit = Edit::between("abc def ghi", "abc dXXef ghi");
-        assert_eq!((edit.prefix, edit.old_end, edit.new_end), (5, 5, 7));
-        assert_eq!(edit.forward(2), Some(2));
-        assert_eq!(edit.forward(5), None);
-        assert_eq!(edit.forward(8), Some(10));
-        assert_eq!(edit.backward(10), Some(8));
-        assert_eq!(edit.backward(6), None);
-        assert_eq!(edit.range_shift((0, 4)), Some(0));
-        assert_eq!(edit.range_shift((6, 11)), Some(2));
-        assert_eq!(edit.range_shift((3, 6)), None);
-        // A deletion moves back. The two texts share `one t` and `hree`, so
-        // the deleted range is `wo t` (5..9): a range ending at it stands, one
-        // starting inside it does not.
-        let edit = Edit::between("one two three", "one three");
-        assert_eq!((edit.prefix, edit.old_end, edit.new_end), (5, 9, 5));
-        assert_eq!(edit.range_shift((0, 4)), Some(0));
-        assert_eq!(edit.range_shift((9, 13)), Some(-4));
-        assert_eq!(edit.range_shift((8, 13)), None);
-        let same = Edit::between("same", "same");
-        assert_eq!(same.range_shift((0, 4)), Some(0));
-    }
-
-    #[test]
-    fn a_replayed_item_gets_fresh_placeholder_ids_with_offsets_moved() {
-        let text = "const __swh7_x = __swp3(__swh7_x) + __swh12_y;";
-        let regions = vec![(3, ("p".to_owned(), "v".to_owned(), false))];
-        let (out, moves) = renumber(text, &regions);
-        let ids = placeholder_ids(&out, crate::sweetener_hygiene::PREFIX, b'_');
-        assert_eq!(ids.len(), 3);
-        // The same old id is the same new one; different old ids differ.
-        assert_eq!(ids[0], ids[1]);
-        assert_ne!(ids[0], ids[2]);
-        assert!(!ids.contains(&7) || !ids.contains(&12));
-        let region = placeholder_ids(&out, crate::sweetener_scoped::OPEN, b'(')[0];
-        assert_eq!(
-            crate::sweetener_scoped::region(region),
-            Some(("p".to_owned(), "v".to_owned(), false))
-        );
-        // The end of the text moved by the change in length.
-        assert_eq!(moved(&moves, text.len() as u32) as usize, out.len());
-        assert_eq!(moved(&moves, 0), 0);
-        let plain = "no placeholders";
-        assert_eq!(renumber(plain, &[]), (plain.to_owned(), Vec::new()));
-    }
-
-    #[test]
-    fn a_logged_item_is_replayed_only_where_its_names_answer_the_same() {
-        let mut names = UserNames::new(["a".to_owned()].into_iter().collect());
-        NAME_LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
-        assert!(names.contains("a"));
-        assert!(!names.contains("b"));
-        let log = NAME_LOG.with(|log| log.borrow_mut().take()).unwrap();
-        assert_eq!(log, vec![("a".to_owned(), true), ("b".to_owned(), false)]);
-        assert!(names.answers(&log));
-        names.insert("b".to_owned());
-        assert!(!names.answers(&log));
-        // A repeated insert is logged, for a replay where the first is gone.
-        names.insert("b".to_owned());
-        assert_eq!(names.added, vec!["b".to_owned(), "b".to_owned()]);
-    }
-
-    #[test]
-    fn the_pass_fingerprint_leaves_positions_out_but_not_order_or_text() {
-        let hash = |text: &str| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            hash_debug(&text, &mut hasher);
-            hasher.finish()
-        };
-        // `Debug` of a `&str` quotes it, so build the prints by hand.
-        #[derive(Debug)]
-        #[allow(dead_code)]
-        struct Span {
-            start: u32,
-            end: u32,
-        }
-        #[derive(Debug)]
-        #[allow(dead_code)]
-        struct Rule {
-            name: &'static str,
-            head: Span,
-        }
-        let one = |name, start, end| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            hash_debug(
-                &Rule {
-                    name,
-                    head: Span { start, end },
-                },
-                &mut hasher,
-            );
-            hasher.finish()
-        };
-        assert_eq!(one("m", 10, 20), one("m", 30, 40));
-        assert_ne!(one("m", 10, 20), one("n", 10, 20));
-        assert_ne!(hash("a"), hash("b"));
-        let set = |rules: &[(&'static str, u32)]| {
-            let values: Vec<Rule> = rules
-                .iter()
-                .map(|(name, at)| Rule {
-                    name,
-                    head: Span {
-                        start: *at,
-                        end: *at,
-                    },
-                })
-                .collect();
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            hash_debug_set(&values, &mut hasher);
-            hasher.finish()
-        };
-        assert_eq!(set(&[("a", 1), ("b", 2)]), set(&[("b", 9), ("a", 5)]));
-        assert_ne!(set(&[("a", 1)]), set(&[("a", 1), ("b", 2)]));
     }
 }

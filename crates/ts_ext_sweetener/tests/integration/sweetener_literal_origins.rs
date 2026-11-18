@@ -5,11 +5,7 @@
 use ts_ext_sweetener::{ExpandRequest, Expansion, Phase, expand};
 
 fn run(code: &str) -> Expansion {
-    let out = expand(ExpandRequest {
-        filename: "literals.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "literals.sts", code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     out
 }
@@ -17,10 +13,7 @@ fn run(code: &str) -> Expansion {
 /// Where the `nth` printed `needle` came from, if it has an exact origin.
 fn origin_of(out: &Expansion, needle: &str, nth: usize) -> Option<u32> {
     let at = out.code.match_indices(needle).nth(nth)?.0 as u32;
-    out.origins
-        .iter()
-        .find(|o| o.virtual_start == at && !o.introduced)
-        .map(|o| o.original_start)
+    out.origins.iter().find(|o| o.virtual_start == at && !o.introduced).map(|o| o.original_start)
 }
 
 fn nth_in(code: &str, needle: &str, nth: usize) -> u32 {
@@ -33,12 +26,7 @@ fn rule_literals_class_literals_and_separators_map_to_the_matched_token() {
     let body = "const q = query(db) { select { id: 1 } from users where ok };\nconst r = all(a and b and c);\n";
     let code = format!("{defs}{body}");
     let out = run(&code);
-    assert!(
-        out.code
-            .contains("db.select({ id: 1 }).from(users).where(ok)"),
-        "{}",
-        out.code
-    );
+    assert!(out.code.contains("db.select({ id: 1 }).from(users).where(ok)"), "{}", out.code);
     let body_at = defs.len();
     let user = |needle: &str| body_at as u32 + nth_in(body, needle, 0);
     assert_eq!(origin_of(&out, "select", 0), Some(user("select")));

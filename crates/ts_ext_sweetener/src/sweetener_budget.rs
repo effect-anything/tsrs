@@ -89,9 +89,7 @@ pub(crate) fn max_nesting_depth() -> u64 {
     TRACKER.with(|t| {
         t.borrow()
             .as_ref()
-            .map_or(ResourceBudget::default().max_nesting_depth, |t| {
-                t.budget.max_nesting_depth
-            })
+            .map_or(ResourceBudget::default().max_nesting_depth, |t| t.budget.max_nesting_depth)
     })
 }
 

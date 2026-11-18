@@ -49,9 +49,7 @@ fn lex(text: &str) -> Vec<Tok> {
         } else if text[at..].starts_with("//") {
             at = text[at..].find('\n').map_or(bytes.len(), |end| at + end);
         } else if text[at..].starts_with("/*") {
-            at = text[at + 2..]
-                .find("*/")
-                .map_or(bytes.len(), |end| at + 2 + end + 2);
+            at = text[at + 2..].find("*/").map_or(bytes.len(), |end| at + 2 + end + 2);
         } else if matches!(ch, '"' | '\'' | '`') {
             at = string_end(text, at);
             out.push(Tok::Atom);
@@ -128,10 +126,7 @@ fn top_level(text: &str) -> Vec<Tok> {
 }
 
 fn is_prefix_word(word: &str) -> bool {
-    matches!(
-        word,
-        "typeof" | "void" | "delete" | "await" | "new" | "yield"
-    )
+    matches!(word, "typeof" | "void" | "delete" | "await" | "new" | "yield")
 }
 
 fn infix_word(word: &str) -> Option<u32> {
@@ -229,11 +224,7 @@ fn shape(text: &str) -> Shape {
             }
         }
     }
-    Shape {
-        atomic,
-        precedence,
-        unary_start,
-    }
+    Shape { atomic, precedence, unary_start }
 }
 
 /// What stands on one side of a splice.
@@ -247,10 +238,7 @@ enum Side {
     Separator,
     /// An operator the expression is an operand of: the least precedence
     /// it must have to hold together without parentheses, and its spelling.
-    Operand {
-        minimum: u32,
-        spelling: &'static str,
-    },
+    Operand { minimum: u32, spelling: &'static str },
     /// A member access, call, index or tagged template: only an atomic
     /// expression holds together before it.
     Member,
@@ -263,49 +251,32 @@ enum Side {
 fn left_side(before: &str, neutral: bool) -> Side {
     let toks = lex(before);
     let Some(last) = toks.last() else {
-        return if neutral {
-            Side::Neutral
-        } else {
-            Side::Nothing
-        };
+        return if neutral { Side::Neutral } else { Side::Nothing };
     };
     let previous = toks.len().checked_sub(2).and_then(|at| toks.get(at));
     match last {
         Tok::Open('(' | '[') => Side::ListEdge,
         Tok::Punct("," | ";") => Side::Separator,
         Tok::Punct("=>") => Side::ArrowBody,
-        Tok::Punct("?") => Side::Operand {
-            minimum: 11,
-            spelling: "?",
-        },
-        Tok::Punct(":") if open_conditional(&toks) => Side::Operand {
-            minimum: ARROW,
-            spelling: ":",
-        },
+        Tok::Punct("?") => Side::Operand { minimum: 11, spelling: "?" },
+        Tok::Punct(":") if open_conditional(&toks) => {
+            Side::Operand { minimum: ARROW, spelling: ":" }
+        }
         Tok::Punct("+" | "-" | "~" | "!" | "++" | "--") if !ends_operand(previous) => {
-            Side::Operand {
-                minimum: UNARY + 1,
-                spelling: "prefix",
-            }
+            Side::Operand { minimum: UNARY + 1, spelling: "prefix" }
         }
         Tok::Word(word) if is_prefix_word(word) => Side::Operand {
-            minimum: if word == "yield" {
-                ARROW + 1
-            } else {
-                UNARY + 1
-            },
+            minimum: if word == "yield" { ARROW + 1 } else { UNARY + 1 },
             spelling: "prefix",
         },
-        Tok::Word(word) if infix_word(word).is_some() => Side::Operand {
-            minimum: 111,
-            spelling: "in",
-        },
+        Tok::Word(word) if infix_word(word).is_some() => {
+            Side::Operand { minimum: 111, spelling: "in" }
+        }
         Tok::Punct(punct) => match infix(punct) {
             Some((20, _)) if declares(&toks) => Side::Nothing,
-            Some((prec, right)) => Side::Operand {
-                minimum: if right { prec } else { prec + 1 },
-                spelling: punct,
-            },
+            Some((prec, right)) => {
+                Side::Operand { minimum: if right { prec } else { prec + 1 }, spelling: punct }
+            }
             None => Side::Nothing,
         },
         _ => Side::Nothing,
@@ -315,37 +286,22 @@ fn left_side(before: &str, neutral: bool) -> Side {
 fn right_side(after: &str, neutral: bool, conditional: bool) -> Side {
     let toks = lex(after);
     let Some(first) = toks.first() else {
-        return if neutral {
-            Side::Neutral
-        } else {
-            Side::Nothing
-        };
+        return if neutral { Side::Neutral } else { Side::Nothing };
     };
     match first {
         Tok::Close(')' | ']') => Side::ListEdge,
         Tok::Punct("," | ";") => Side::Separator,
         Tok::Punct("." | "?." | "!") | Tok::Open('(' | '[') | Tok::Atom => Side::Member,
-        Tok::Punct("?") => Side::Operand {
-            minimum: 40,
-            spelling: "?",
-        },
-        Tok::Punct(":") if conditional => Side::Operand {
-            minimum: 11,
-            spelling: ":",
-        },
-        Tok::Punct("++" | "--") => Side::Operand {
-            minimum: 171,
-            spelling: "postfix",
-        },
-        Tok::Word(word) if infix_word(word).is_some() => Side::Operand {
-            minimum: 110,
-            spelling: "in",
-        },
+        Tok::Punct("?") => Side::Operand { minimum: 40, spelling: "?" },
+        Tok::Punct(":") if conditional => Side::Operand { minimum: 11, spelling: ":" },
+        Tok::Punct("++" | "--") => Side::Operand { minimum: 171, spelling: "postfix" },
+        Tok::Word(word) if infix_word(word).is_some() => {
+            Side::Operand { minimum: 110, spelling: "in" }
+        }
         Tok::Punct(punct) => match infix(punct) {
-            Some((prec, right)) => Side::Operand {
-                minimum: if right { prec + 1 } else { prec },
-                spelling: punct,
-            },
+            Some((prec, right)) => {
+                Side::Operand { minimum: if right { prec + 1 } else { prec }, spelling: punct }
+            }
             None => Side::Nothing,
         },
         _ => Side::Nothing,
@@ -393,7 +349,7 @@ fn declares(toks: &[Tok]) -> bool {
 /// Whether `expr`, spliced between `before` and `after`, needs grouping
 /// parentheses to keep its meaning. `neutral` says the edges of `before`
 /// and `after` are a template's edges, not the file's.
-pub(crate) fn needs_group(before: &str, expr: &str, after: &str, neutral: bool) -> bool {
+pub fn needs_group(before: &str, expr: &str, after: &str, neutral: bool) -> bool {
     let expr = expr.trim();
     if expr.is_empty() || (expr.starts_with('(') && closes_at_end(expr)) {
         return false;
@@ -572,45 +528,4 @@ pub(crate) fn group_spans(
         })
         .collect();
     (out, moved)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::needs_group;
-
-    fn group(before: &str, expr: &str, after: &str) -> bool {
-        needs_group(before, expr, after, false)
-    }
-
-    #[test]
-    fn matches_upstream_printing() {
-        assert!(group("const a = ", "p && q", ";"));
-        assert!(!group("x = ", "p && q", ";"));
-        assert!(!group("f(", "p && q", ")"));
-        assert!(!group("[", "p && q", ", 1]"));
-        assert!(group("function g() { return ", "p && q", "; }"));
-        assert!(!group("const i = ", "p && q", " ? 1 : 2;"));
-        assert!(group("!", "p && q", ";"));
-        assert!(group("const a = ", "x + 1", " * 2;"));
-        assert!(!group("const c = ", "-(x * y)", " * 2;"));
-        assert!(group("const j = ", "-(a + b)", " ** 2;"));
-        assert!(group("{ k: ", "a + b", " }"));
-        assert!(!group("const e = ", "g(a + b)", ";"));
-        assert!(needs_group("", "a + b", ".length", true));
-        assert!(needs_group("p && ", "q || r", "", true));
-        assert!(!needs_group("p && ", "typeof q", "", true));
-        assert!(!needs_group("p && ", "x as T", "", true));
-        assert!(needs_group("p && ", "q?.r ?? s", "", true));
-        assert!(!needs_group("", "a * b", " && c", true));
-        assert!(needs_group("", "a || b", " && c", true));
-        assert!(!needs_group("", "p && q", "", true));
-        assert!(needs_group("-", "-x", "", true));
-        assert!(needs_group("p && ", "() => 1", "", true));
-        assert!(!needs_group("", "(v) => v", "", true));
-        assert!(group("const f = () => ", "{ value: 1 }", ";"));
-        assert!(group("x;\n", "{ value: 2 }", ";"));
-        assert!(group("", "function () { return 3; }", "();"));
-        assert!(!group("const o = ", "{ value: 1 }", ";"));
-        assert!(!group("f(", "function () {}", ")"));
-    }
 }

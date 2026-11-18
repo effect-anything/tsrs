@@ -5,11 +5,7 @@
 use ts_ext_sweetener::{ExpandRequest, Phase, expand};
 
 fn run(code: &str) -> (String, Vec<String>) {
-    let out = expand(ExpandRequest {
-        filename: "gap.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "gap.sts", code, phase: Phase::Check });
     let code = out.code.split_whitespace().collect::<Vec<_>>().join(" ");
     let diagnostics = out
         .diagnostics

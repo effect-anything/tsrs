@@ -29,14 +29,14 @@ fn median(mut times: Vec<Duration>) -> Duration {
 
 fn time(runs: usize, mut before: impl FnMut(), mut f: impl FnMut()) -> Duration {
     median(
-        (0..runs)
-            .map(|_| {
-                before();
-                let start = Instant::now();
-                f();
-                start.elapsed()
-            })
-            .collect(),
+        std::iter::repeat_with(|| {
+            before();
+            let start = Instant::now();
+            f();
+            start.elapsed()
+        })
+        .take(runs)
+        .collect(),
     )
 }
 
@@ -55,14 +55,10 @@ fn main() {
         args.remove(at);
         for file in &args {
             let code = std::fs::read_to_string(file).expect("read");
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            let mut hasher = std::hash::DefaultHasher::new();
             for phase in [Phase::Check, Phase::Build] {
                 clear_caches();
-                let out = expand(ExpandRequest {
-                    filename: file,
-                    code: &code,
-                    phase,
-                });
+                let out = expand(ExpandRequest { filename: file, code: &code, phase });
                 std::hash::Hash::hash(&format!("{out:?}"), &mut hasher);
             }
             println!("{:016x} {file}", std::hash::Hasher::finish(&hasher));
@@ -82,13 +78,8 @@ fn main() {
         let path = std::fs::canonicalize(file).expect("file");
         let filename = path.display().to_string();
         let code = std::fs::read_to_string(&path).expect("read");
-        let request = |code: &str, phase| {
-            expand(ExpandRequest {
-                filename: &filename,
-                code,
-                phase,
-            })
-        };
+        let request =
+            |code: &str, phase| expand(ExpandRequest { filename: &filename, code, phase });
         let first = request(&code, Phase::Check);
         let cold = time(runs, clear_caches, || {
             request(&code, Phase::Check);
@@ -159,13 +150,8 @@ fn edits(runs: usize, files: &[String]) {
         let path = std::fs::canonicalize(file).expect("file");
         let filename = path.display().to_string();
         let code = std::fs::read_to_string(&path).expect("read");
-        let request = |code: &str| {
-            expand(ExpandRequest {
-                filename: &filename,
-                code,
-                phase: Phase::Check,
-            })
-        };
+        let request =
+            |code: &str| expand(ExpandRequest { filename: &filename, code, phase: Phase::Check });
         if let Ok(n) = std::env::var("SWEETENER_EDIT_PROFILE") {
             let at = line_near(&code, 0.5);
             request(&code);
@@ -187,11 +173,7 @@ fn edits(runs: usize, files: &[String]) {
                     request(&format!("{}/*e{serial}*/ {}", &code[..at], &code[at..]));
                 },
             );
-            println!(
-                "| {} | {name} | {} |",
-                path.file_name().unwrap().to_string_lossy(),
-                ms(took)
-            );
+            println!("| {} | {name} | {} |", path.file_name().unwrap().to_string_lossy(), ms(took));
         }
     }
 }

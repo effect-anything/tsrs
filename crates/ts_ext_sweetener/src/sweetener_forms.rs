@@ -8,18 +8,6 @@
 
 use super::sweetener_reader::{self, Delimiter, Syntax};
 
-/// `signals`: `syntax state` still emits `#syntax`, `#join`, and `#metavar`.
-///
-/// Rule `state $name:binding = $initial:expr`:
-/// bind `#join($name, suffix: "Signal")` in the following items, then emit
-/// `const <name>Signal = createSignal($initial)` and a nested `syntax $name`
-/// whose rules substitute that joined name and `#metavar("value", $name)`.
-#[cfg(test)]
-pub fn expand_state_signal(name: &str, initial: &str) -> String {
-    let signal = join_ident(name, "", "Signal", "preserve");
-    format!("const {signal} = createSignal({initial});")
-}
-
 /// One fixture form at `index`, if this sibling list is one of the cases this
 /// file owns. `None` means the expander's own rules should run.
 pub fn try_expand_fixture(
@@ -103,9 +91,8 @@ pub fn handwritten_form_in_scope(
     let imports = imported_syntax_bindings(file);
     if let Some(raw) = token_raw(nodes.get(index)) {
         if raw != "function" && raw != "export" {
-            if let Some((_, export)) = imports
-                .iter()
-                .find(|(local, _)| local.as_str() == AsRef::<str>::as_ref(&raw))
+            if let Some((_, export)) =
+                imports.iter().find(|(local, _)| local.as_str() == AsRef::<str>::as_ref(&raw))
             {
                 return is_handwritten_export(export)
                     || handwritten_spelling(nodes, index).is_none();
@@ -125,9 +112,7 @@ pub fn handwritten_form_in_scope(
         // Not a library form this pass owns. Leave it for the core printer.
         return true;
     };
-    imports
-        .iter()
-        .any(|(local, export)| local == spelling && export == spelling)
+    imports.iter().any(|(local, export)| local == spelling && export == spelling)
 }
 
 fn is_handwritten_export(name: &str) -> bool {
@@ -179,10 +164,7 @@ fn handwritten_spelling(nodes: &[Syntax], index: usize) -> Option<&'static str> 
         return None;
     }
     if let Some(children) = group_children(nodes.get(index), Delimiter::Bracket) {
-        if children
-            .first()
-            .is_some_and(|child| operator_is(Some(child), "#"))
-        {
+        if children.first().is_some_and(|child| operator_is(Some(child), "#")) {
             return Some("#");
         }
         return None;
@@ -221,7 +203,7 @@ const THREAD_LAST: &str = "->>";
 /// `(local, export)` pairs bound by top-level `for syntax` imports.
 /// Imports nested in a function or block do not count (upstream reads module
 /// imports only).
-pub(crate) fn imported_syntax_bindings(nodes: &[Syntax]) -> std::rc::Rc<Vec<(String, String)>> {
+pub fn imported_syntax_bindings(nodes: &[Syntax]) -> std::rc::Rc<Vec<(String, String)>> {
     let active = FILE_IMPORTS.with(|active| {
         active
             .borrow()
@@ -250,15 +232,9 @@ thread_local! {
 pub fn with_file_imports<T>(file: &[Syntax], f: impl FnOnce() -> T) -> T {
     let mut names = Vec::new();
     collect_imported_syntax_names(file, &mut names);
-    let saved = FILE_IMPORTS.with(|active| {
-        active
-            .borrow_mut()
-            .replace((file.as_ptr_range(), std::rc::Rc::new(names)))
-    });
-    type Saved = Option<(
-        std::ops::Range<*const Syntax>,
-        std::rc::Rc<Vec<(String, String)>>,
-    )>;
+    let saved = FILE_IMPORTS
+        .with(|active| active.borrow_mut().replace((file.as_ptr_range(), std::rc::Rc::new(names))));
+    type Saved = Option<(std::ops::Range<*const Syntax>, std::rc::Rc<Vec<(String, String)>>)>;
     struct Restore(Saved);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -274,11 +250,8 @@ fn collect_imported_syntax_names(nodes: &[Syntax], names: &mut Vec<(String, Stri
     let mut index = 0;
     while index < nodes.len() {
         if syntax_import_here(nodes, index) {
-            if let Some(Syntax::Group {
-                children,
-                delimiter: Delimiter::Brace,
-                ..
-            }) = nodes.get(index + 1)
+            if let Some(Syntax::Group { children, delimiter: Delimiter::Brace, .. }) =
+                nodes.get(index + 1)
             {
                 collect_import_binding_names(children, names);
             }
@@ -313,11 +286,7 @@ fn collect_import_binding_names(children: &[Syntax], names: &mut Vec<(String, St
                 names.push((raw.clone(), raw.clone()));
             }
         }
-        if let Syntax::Group {
-            delimiter: Delimiter::Paren,
-            children: inner,
-            ..
-        } = &children[child]
+        if let Syntax::Group { delimiter: Delimiter::Paren, children: inner, .. } = &children[child]
         {
             let name = inner
                 .iter()
@@ -396,26 +365,6 @@ pub fn fresh_binder(name: &str) -> String {
     printed
 }
 
-/// `threading`: `export rec syntax (->)` / `(->>)`.
-///
-/// Thread-first inserts the value as the first argument and recurses:
-/// `(-> $value, $next($($argument),*), $($rest)+)` =>
-/// `(-> $next($value, $($argument),*), $($rest)+)`.
-/// Thread-last inserts it last. A trailing comma is the same rule with no
-/// rest. One remaining call is the base rule, not another `(-> ...)`.
-#[cfg(test)]
-pub fn expand_thread_first(value: &str, steps: &[ThreadStep<'_>]) -> String {
-    thread_calls(value, steps, true)
-}
-
-/// `map((value) => value + 1)` as one threading step.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub struct ThreadStep<'a> {
-    pub callee: &'a str,
-    pub args: &'a [&'a str],
-}
-
 /// `2 -> table` or `received <- table` at statement position.
 pub fn match_channel_stmt(source: &str, nodes: &[Syntax], index: usize) -> Option<ChannelStmt> {
     let left = nodes.get(index)?;
@@ -455,11 +404,7 @@ fn match_signal_read(
     if index > 0 && operator_is(nodes.get(index - 1), ".") {
         return None;
     }
-    if nodes
-        .get(index + 1)
-        .and_then(operator_raw)
-        .is_some_and(is_signal_assign)
-    {
+    if nodes.get(index + 1).and_then(operator_raw).is_some_and(is_signal_assign) {
         return None;
     }
     Some(FixtureRewrite {
@@ -493,13 +438,7 @@ fn match_signal_use(
     if operator_is(nodes.get(next.saturating_sub(1)), ";") && !text.ends_with(';') {
         text.push(';');
     }
-    Some(FixtureRewrite {
-        start: node_start(&nodes[index]),
-        end,
-        next,
-        text,
-        binds: Vec::new(),
-    })
+    Some(FixtureRewrite { start: node_start(&nodes[index]), end, next, text, binds: Vec::new() })
 }
 
 fn read_assign(nodes: &[Syntax], index: usize) -> Option<(String, usize)> {
@@ -562,29 +501,8 @@ fn take_value<'a>(
             break;
         }
     }
-    let next = if operator_is(nodes.get(cursor), ";") {
-        cursor + 1
-    } else {
-        cursor
-    };
+    let next = if operator_is(nodes.get(cursor), ";") { cursor + 1 } else { cursor };
     Some((source.get(start..end)?, end, next))
-}
-
-#[cfg(test)]
-fn thread_calls(value: &str, steps: &[ThreadStep<'_>], first: bool) -> String {
-    let mut current = value.trim().to_owned();
-    for step in steps {
-        let mut args = Vec::new();
-        if first {
-            args.push(current);
-            args.extend(step.args.iter().map(|arg| arg.trim().to_owned()));
-        } else {
-            args.extend(step.args.iter().map(|arg| arg.trim().to_owned()));
-            args.push(current);
-        }
-        current = format!("{}({})", step.callee, args.join(", "));
-    }
-    current
 }
 
 fn upper_first(text: &str) -> String {
@@ -633,12 +551,11 @@ fn operator_raw(node: &Syntax) -> Option<&str> {
 
 fn group_children<'a>(node: Option<&'a Syntax>, delimiter: Delimiter) -> Option<&'a [Syntax]> {
     match node {
-        Some(Syntax::Group {
-            delimiter: found,
-            children,
-            close: Some(_),
-            ..
-        }) if *found == delimiter => Some(children),
+        Some(Syntax::Group { delimiter: found, children, close: Some(_), .. })
+            if *found == delimiter =>
+        {
+            Some(children)
+        }
         _ => None,
     }
 }
@@ -660,209 +577,5 @@ fn node_end(node: &Syntax) -> usize {
         | Syntax::String { span, .. }
         | Syntax::Operator { span, .. }
         | Syntax::Group { span, .. } => span.end as usize,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn state_signal_substitutes_join_and_metavar() {
-        let printed = expand_state_signal("count", "1");
-        assert!(printed.contains("const countSignal = createSignal(1);"));
-        assert!(!printed.contains("#syntax"));
-        assert!(!printed.contains("#join"));
-        assert!(!printed.contains("#metavar"));
-        let use_ = apply_signal_use("count", "countSignal", Some("+="), Some("2"));
-        assert_eq!(use_, "countSignal.set(countSignal.get() + 2)");
-        let or = apply_signal_use("flag", "flagSignal", Some("||="), Some("true"));
-        assert_eq!(or, "flagSignal.get() || flagSignal.set(true)");
-    }
-
-    #[test]
-    fn channel_do_thread_and_jsx() {
-        assert_eq!(
-            expand_thread_first(
-                "[1, 2, 3]",
-                &[
-                    ThreadStep {
-                        callee: "map",
-                        args: &["(value) => value + 1"],
-                    },
-                    ThreadStep {
-                        callee: "filter",
-                        args: &["(value) => value > 2"],
-                    },
-                ],
-            ),
-            "filter(map([1, 2, 3], (value) => value + 1), (value) => value > 2)"
-        );
-    }
-
-    /// A library form with no `for syntax` import is not rewritten. The same
-    /// form expands through its imported rules once the file imports its
-    /// spelling; a nested-block import does not authorize it.
-    #[test]
-    fn handwritten_forms_follow_the_syntax_import() {
-        let bare = "const a = match (1) { 1 => 2, _ => 3 };\nconst v = #[1, 2];\nconst d = data Box<T> = Full(value: T) | Empty();\n";
-        let expanded = crate::expand(crate::ExpandRequest {
-            filename: "bare.sts",
-            code: bare,
-            phase: crate::Phase::Build,
-        });
-        // Upstream warns that it could not read these (SWR4025) and passes
-        // them through; nothing is an error.
-        assert!(
-            expanded
-                .diagnostics
-                .iter()
-                .all(|item| item.severity == crate::Severity::Warning),
-            "{:?}",
-            expanded.diagnostics
-        );
-        assert_eq!(expanded.diagnostics.len(), 3, "{:?}", expanded.diagnostics);
-        assert!(
-            expanded.code.contains("match (1)"),
-            "match was rewritten:\n{}",
-            expanded.code
-        );
-        assert!(
-            expanded.code.contains("#[1, 2]"),
-            "vector was rewritten:\n{}",
-            expanded.code
-        );
-        assert!(!expanded.code.contains("vector("), "{}", expanded.code);
-        assert!(
-            expanded.code.contains("data Box"),
-            "data was rewritten:\n{}",
-            expanded.code
-        );
-
-        let dir = std::env::temp_dir().join("sw-gate-form-import");
-        let _ = std::fs::create_dir_all(&dir);
-        let macros = "export syntax match:expr {\n  rule { match ($value:expr) { $($arms:tt)* } } => { matched($value) }\n}\nexport syntax (#):expr {\n  rule { #[$($element:expr),*] } => { vector($($element),*) }\n}\nexport syntax data:item {\n  rule { data $name:binding<$t:binding> = $($rest:tt)*; } => { type $name = 1; }\n}\n";
-        std::fs::write(dir.join("macros.sts"), macros).expect("macro fixture");
-        let imported_path = dir.join("imported.sts");
-        let imported = "import { match, (#), data } from \"./macros.sts\" for syntax;\nconst a = match (1) { 1 => 2, _ => 3 };\nconst v = #[1, 2];\ndata Box<T> = Full(value: T) | Empty();\n";
-        let imported_name = imported_path.display().to_string();
-        let expanded = crate::expand(crate::ExpandRequest {
-            filename: &imported_name,
-            code: imported,
-            phase: crate::Phase::Build,
-        });
-        assert!(
-            expanded.diagnostics.is_empty(),
-            "{:?}",
-            expanded.diagnostics
-        );
-        assert!(
-            !expanded.code.contains("match (1)"),
-            "imported match stayed:\n{}",
-            expanded.code
-        );
-        assert!(
-            expanded.code.contains("vector(1, 2)"),
-            "imported vector stayed:\n{}",
-            expanded.code
-        );
-        assert!(
-            !expanded.code.contains("data Box"),
-            "imported data stayed:\n{}",
-            expanded.code
-        );
-
-        let nested_path = dir.join("nested.sts");
-        let nested = "function body() {\n  import { match } from \"./macros.sts\" for syntax;\n  const a = match (1) { 1 => 2, _ => 3 };\n}\nconst v = #[1, 2];\n";
-        let nested_name = nested_path.display().to_string();
-        let expanded = crate::expand(crate::ExpandRequest {
-            filename: &nested_name,
-            code: nested,
-            phase: crate::Phase::Build,
-        });
-        assert!(
-            expanded.code.contains("match (1)"),
-            "nested import authorized match:\n{}",
-            expanded.code
-        );
-        assert!(
-            expanded.code.contains("import { match }"),
-            "nested import was dropped: {}",
-            expanded.code
-        );
-
-        assert!(
-            expanded.code.contains("#[1, 2]"),
-            "unimported vector was rewritten:\n{}",
-            expanded.code
-        );
-
-        // A renamed import authorizes its local name, not the export name.
-        let renamed_path = dir.join("renamed.sts");
-        let renamed = "import { match as mymatch } from \"./macros.sts\" for syntax;\nconst a = mymatch (1) { 1 => 2, _ => 3 };\nconst b = match (2) { 1 => 2, _ => 3 };\n";
-        let renamed_name = renamed_path.display().to_string();
-        let expanded = crate::expand(crate::ExpandRequest {
-            filename: &renamed_name,
-            code: renamed,
-            phase: crate::Phase::Build,
-        });
-        assert!(
-            !expanded.code.contains("mymatch (1)"),
-            "renamed match stayed: {}",
-            expanded.code
-        );
-        assert!(
-            expanded.code.contains("match (2)"),
-            "export name expanded without its binding: {}",
-            expanded.code
-        );
-
-        let function =
-            "const f = function(value: number) { const doubled = value * 2; doubled + 1 };\n";
-        let expanded = crate::expand(crate::ExpandRequest {
-            filename: "core.sts",
-            code: function,
-            phase: crate::Phase::Build,
-        });
-        // Upstream's implicit-return `function` is a library macro. Without
-        // a `for syntax` import the function is core TypeScript, as written.
-        assert!(
-            !expanded.code.contains("return doubled + 1"),
-            "unimported function was rewritten:\n{}",
-            expanded.code
-        );
-    }
-}
-
-#[cfg(test)]
-mod file_import_tests {
-    use super::{imported_syntax_bindings, with_file_imports};
-    use crate::sweetener_reader::read_syntax;
-
-    /// The once-per-file bindings answer only for that exact slice, and the
-    /// previous scope comes back after, so another file is never confused.
-    #[test]
-    fn file_imports_are_scoped_to_their_slice() {
-        let a = read_syntax("import { each } from \"./a.sts\" for syntax;\nconst x = 1;\n");
-        let b = read_syntax("import { when as w } from \"./b.sts\" for syntax;\n");
-        let pairs =
-            |nodes| -> Vec<(String, String)> { imported_syntax_bindings(nodes).as_ref().clone() };
-        let fresh_a = pairs(&a.children);
-        assert_eq!(fresh_a, vec![("each".to_owned(), "each".to_owned())]);
-        with_file_imports(&a.children, || {
-            assert_eq!(pairs(&a.children), fresh_a);
-            assert_eq!(
-                pairs(&b.children),
-                vec![("w".to_owned(), "when".to_owned())]
-            );
-            assert!(pairs(&a.children[1..]).is_empty());
-            with_file_imports(&b.children, || {
-                assert_eq!(
-                    pairs(&b.children),
-                    vec![("w".to_owned(), "when".to_owned())]
-                );
-            });
-            assert_eq!(pairs(&a.children), fresh_a);
-        });
     }
 }

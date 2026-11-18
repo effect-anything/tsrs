@@ -20,10 +20,7 @@ fn every_local_macro_case_matches_theirs() {
         if snapshot_file(&dir, "theirs").is_none() {
             continue;
         }
-        let rel = dir
-            .trim_start_matches(&root)
-            .trim_start_matches('/')
-            .to_owned();
+        let rel = dir.trim_start_matches(&root).trim_start_matches('/').to_owned();
         if open.contains(&rel.as_str()) {
             continue;
         }
@@ -31,12 +28,7 @@ fn every_local_macro_case_matches_theirs() {
             failed.push(format!("{rel}: {why}"));
         }
     }
-    assert!(
-        failed.is_empty(),
-        "{} cases differ:\n{}",
-        failed.len(),
-        failed.join("\n")
-    );
+    assert!(failed.is_empty(), "{} cases differ:\n{}", failed.len(), failed.join("\n"));
 }
 
 fn walk(dir: &str) -> Vec<String> {
@@ -79,12 +71,8 @@ fn case_equal(dir: &str) -> Result<(), String> {
     let theirs = snapshot_file(dir, "theirs").ok_or_else(|| "no theirs".to_owned())?;
     let code = std::fs::read_to_string(&input).map_err(|err| err.to_string())?;
     let reference = std::fs::read_to_string(&theirs).map_err(|err| err.to_string())?;
-    let tsx = theirs
-        .extension()
-        .is_some_and(|ext| ext == "tsx" || ext == "stsx")
-        || input
-            .extension()
-            .is_some_and(|ext| ext == "tsx" || ext == "stsx");
+    let tsx = theirs.extension().is_some_and(|ext| ext == "tsx" || ext == "stsx")
+        || input.extension().is_some_and(|ext| ext == "tsx" || ext == "stsx");
     let expansion = expand(ExpandRequest {
         filename: &input.display().to_string(),
         code: &code,
@@ -177,10 +165,7 @@ fn malformed_cases_are_refused() {
             }),
             "{name} kept no verbatim segment for the item it could not read"
         );
-        assert!(
-            !expansion.diagnostics.is_empty(),
-            "{name} produced no diagnostic"
-        );
+        assert!(!expansion.diagnostics.is_empty(), "{name} produced no diagnostic");
         let joined = expansion
             .diagnostics
             .iter()
@@ -194,18 +179,12 @@ fn malformed_cases_are_refused() {
             ) {
                 continue;
             }
-            assert!(
-                joined.contains(&phrase),
-                "{name} missing {phrase:?} in {joined}"
-            );
+            assert!(joined.contains(&phrase), "{name} missing {phrase:?} in {joined}");
         }
         for diagnostic in &expansion.diagnostics {
             let start = diagnostic.start as usize;
             let end = diagnostic.end as usize;
-            assert!(
-                start <= end && end <= code.len(),
-                "{name} span {start}..{end}"
-            );
+            assert!(start <= end && end <= code.len(), "{name} span {start}..{end}");
             assert!(
                 !(start == 0 && end == code.len()) || code.len() < 8,
                 "{name} span covers the whole file"
@@ -228,16 +207,9 @@ export syntax function:item {\n\
 }\n\
 function plain() { }\n\
 async function later() { }\n";
-    let prefix_out = expand(ExpandRequest {
-        filename: "prefix.sts",
-        code: prefix,
-        phase: Phase::Check,
-    });
-    assert!(
-        prefix_out.diagnostics.is_empty(),
-        "{:?}",
-        prefix_out.diagnostics
-    );
+    let prefix_out =
+        expand(ExpandRequest { filename: "prefix.sts", code: prefix, phase: Phase::Check });
+    assert!(prefix_out.diagnostics.is_empty(), "{:?}", prefix_out.diagnostics);
     // `function` is a core item form and this definition does not write
     // `shadows core`, so the use stays core (as the upstream CLI prints it).
     assert!(
@@ -261,11 +233,7 @@ export syntax keep:item {\n\
   }\n\
 }\n\
 keep function only() { }\n";
-    let once_out = expand(ExpandRequest {
-        filename: "once.sts",
-        code: once,
-        phase: Phase::Check,
-    });
+    let once_out = expand(ExpandRequest { filename: "once.sts", code: once, phase: Phase::Check });
     assert!(
         once_out.code.contains("keep function only()"),
         "a refused `keep` was not left as written:\n{}",
@@ -277,10 +245,7 @@ keep function only() { }\n";
         once_out.code
     );
     assert!(
-        once_out
-            .diagnostics
-            .iter()
-            .any(|item| item.message.contains("macro keep")),
+        once_out.diagnostics.iter().any(|item| item.message.contains("macro keep")),
         "missing keep diagnostic: {:?}",
         once_out.diagnostics
     );
@@ -292,16 +257,9 @@ export syntax keep:item {\n\
   }\n\
 }\n\
 keep function both() { function }\n";
-    let twice_out = expand(ExpandRequest {
-        filename: "twice.sts",
-        code: twice,
-        phase: Phase::Check,
-    });
-    assert!(
-        twice_out.diagnostics.is_empty(),
-        "{:?}",
-        twice_out.diagnostics
-    );
+    let twice_out =
+        expand(ExpandRequest { filename: "twice.sts", code: twice, phase: Phase::Check });
+    assert!(twice_out.diagnostics.is_empty(), "{:?}", twice_out.diagnostics);
     assert!(
         twice_out.code.contains("const both = 1"),
         "a pattern with two `function` literals did not match:\n{}",
@@ -331,11 +289,7 @@ export syntax unless:stmt {\n\
             code: &format!("{macros}{code}"),
             phase: Phase::Check,
         });
-        assert!(
-            expansion.diagnostics.is_empty(),
-            "{label}: {:?}",
-            expansion.diagnostics
-        );
+        assert!(expansion.diagnostics.is_empty(), "{label}: {:?}", expansion.diagnostics);
         assert!(
             expansion.code.contains("if (!(ok))"),
             "{label} did not expand the statement body:\n{}",
@@ -364,29 +318,14 @@ export syntax twice:expr {\n\
 }\n\
 unless (not a call;\n\
 const n = twice(1);\n";
-    let expansion = expand(ExpandRequest {
-        filename: "mixed.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let expansion = expand(ExpandRequest { filename: "mixed.sts", code, phase: Phase::Check });
     assert!(
-        expansion
-            .diagnostics
-            .iter()
-            .any(|item| item.message.contains("macro unless")),
+        expansion.diagnostics.iter().any(|item| item.message.contains("macro unless")),
         "missing unless diagnostic: {:?}",
         expansion.diagnostics
     );
-    assert!(
-        expansion.code.contains("[1, 1]"),
-        "twice was not expanded:\n{}",
-        expansion.code
-    );
-    assert!(
-        expansion.code.contains("unless"),
-        "the failed unless was erased:\n{}",
-        expansion.code
-    );
+    assert!(expansion.code.contains("[1, 1]"), "twice was not expanded:\n{}", expansion.code);
+    assert!(expansion.code.contains("unless"), "the failed unless was erased:\n{}", expansion.code);
     assert!(
         expansion
             .segments
@@ -400,23 +339,13 @@ const n = twice(1);\n";
 #[test]
 fn reader_error_still_prints_the_file() {
     let code = "function f( {\nconst n = 1;\n";
-    let expansion = expand(ExpandRequest {
-        filename: "reader.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let expansion = expand(ExpandRequest { filename: "reader.sts", code, phase: Phase::Check });
     assert!(
-        expansion
-            .diagnostics
-            .iter()
-            .any(|item| item.message.contains("SWR1003")),
+        expansion.diagnostics.iter().any(|item| item.message.contains("SWR1003")),
         "missing reader diagnostic: {:?}",
         expansion.diagnostics
     );
-    assert!(
-        !expansion.code.is_empty(),
-        "reader error discarded the file"
-    );
+    assert!(!expansion.code.is_empty(), "reader error discarded the file");
     assert!(
         expansion.code.contains("const n = 1"),
         "text after the unmatched delimiter was dropped:\n{}",
@@ -464,20 +393,12 @@ export syntax module:item {\n\
   rule { module $name:ident { } } => { namespace $name { } }\n\
 }\n\
 module A { }\n";
-    let out = expand(ExpandRequest {
-        filename: "core.sts",
-        code: plain,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "core.sts", code: plain, phase: Phase::Check });
     assert!(out.code.contains("module A"), "{}", out.code);
     assert!(!out.code.contains("namespace A"), "{}", out.code);
 
     let shadowed = plain.replace("module:item {", "module:item shadows core {");
-    let out = expand(ExpandRequest {
-        filename: "core.sts",
-        code: &shadowed,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "core.sts", code: &shadowed, phase: Phase::Check });
     assert!(out.code.contains("namespace A"), "{}", out.code);
 }
 
@@ -489,18 +410,8 @@ export syntax hello:expr shadows core {\n\
   rule { hello } => { 1 }\n\
 }\n\
 const x = hello;\n";
-    let out = expand(ExpandRequest {
-        filename: "noncore.sts",
-        code,
-        phase: Phase::Check,
-    });
-    assert!(
-        out.diagnostics
-            .iter()
-            .any(|d| d.message.contains("SWR4002")),
-        "{:?}",
-        out.diagnostics
-    );
+    let out = expand(ExpandRequest { filename: "noncore.sts", code, phase: Phase::Check });
+    assert!(out.diagnostics.iter().any(|d| d.message.contains("SWR4002")), "{:?}", out.diagnostics);
 }
 
 /// `spelling in`, `starts-with-uppercase`, `token-kind`, the length
@@ -527,11 +438,7 @@ const k = [kind a, kind b, kind Zed, kind 42, kind q];\n\
 const c = [count [1, 2, 3], count [], count [1]];\n\
 const s = [shape(x => x), shape(a + b), shape(a ? b : c), shape(y = 2)];\n\
 ";
-    let out = expand(ExpandRequest {
-        filename: "refine.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "refine.sts", code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     for line in [
         r#"const k = ["ab", "ab", "upper", "num", "other"];"#,
@@ -543,10 +450,7 @@ const s = [shape(x => x), shape(a + b), shape(a ? b : c), shape(y = 2)];\n\
 }
 
 fn codes(out: &ts_ext_sweetener::Expansion) -> Vec<String> {
-    out.diagnostics
-        .iter()
-        .map(|d| d.message.split(':').next().unwrap_or("").to_owned())
-        .collect()
+    out.diagnostics.iter().map(|d| d.message.split(':').next().unwrap_or("").to_owned()).collect()
 }
 
 /// SWR2016 at the `$` of a repetition with no quantifier and at the capture
@@ -563,11 +467,7 @@ export syntax maybe:expr {\n\
 export syntax hello:expr shadows core {\n\
   rule { hello } => { 1 }\n\
 }\n";
-    let out = expand(ExpandRequest {
-        filename: "malformed.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "malformed.sts", code, phase: Phase::Check });
     let find = |needle: &str| {
         out.diagnostics
             .iter()
@@ -578,10 +478,7 @@ export syntax hello:expr shadows core {\n\
     let repetition = code.find("$($x),]").unwrap();
     assert_eq!(find("repetition requires * or +"), vec![repetition]);
     let conditional = code.find("$x) { 1 }").unwrap();
-    assert_eq!(
-        find("conditional requires present $capture"),
-        vec![conditional]
-    );
+    assert_eq!(find("conditional requires present $capture"), vec![conditional]);
     let definition = code.find("syntax hello").unwrap();
     assert_eq!(find("SWR4002"), vec![definition]);
 }
@@ -591,11 +488,8 @@ export syntax hello:expr shadows core {\n\
 #[test]
 fn unresolved_syntax_module_is_swr5002() {
     let code = "import { foo } from \"./missing-module.sts\" for syntax;\nconst a = 1;\n";
-    let out = expand(ExpandRequest {
-        filename: "/nonexistent-dir/user.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out =
+        expand(ExpandRequest { filename: "/nonexistent-dir/user.sts", code, phase: Phase::Check });
     assert_eq!(codes(&out), vec!["SWR5002"]);
     assert_eq!(out.diagnostics[0].severity, Severity::Error);
     assert_eq!(out.diagnostics[0].start as usize, code.find("foo").unwrap());
@@ -616,40 +510,17 @@ fn unread_legacy_items_warn_swr4025() {
 let function = macro {\n  rule { $x } => { $x }\n}\n\
 let go = macro {\n  rule { $x } => { $x }\n}\n\
 let ok = 1;\n";
-    let out = expand(ExpandRequest {
-        filename: "legacy.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "legacy.sts", code, phase: Phase::Check });
     assert_eq!(codes(&out), vec!["SWR4025", "SWR4025"]);
-    assert!(
-        out.diagnostics
-            .iter()
-            .all(|d| d.severity == Severity::Warning)
-    );
+    assert!(out.diagnostics.iter().all(|d| d.severity == Severity::Warning));
     assert_eq!(Severity::Warning.as_str(), "warning");
-    assert!(
-        out.diagnostics[0]
-            .message
-            .contains("expected variable binding")
-    );
-    assert!(
-        out.diagnostics[1]
-            .message
-            .contains("expected ';' or automatic terminator")
-    );
-    assert_eq!(
-        out.diagnostics[1].start as usize,
-        code.find("let go").unwrap()
-    );
+    assert!(out.diagnostics[0].message.contains("expected variable binding"));
+    assert!(out.diagnostics[1].message.contains("expected ';' or automatic terminator"));
+    assert_eq!(out.diagnostics[1].start as usize, code.find("let go").unwrap());
 }
 
 fn expand_ok(filename: &str, code: &str) -> String {
-    let out = expand(ExpandRequest {
-        filename,
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename, code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     out.code.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -790,15 +661,10 @@ fn item_hole_reads_exports_and_stmt_hole_does_not() {
     let item = expand_ok("item.sts", &source("item"));
     assert!(item.contains("export const a = 1;"), "{item}");
     assert!(!item.contains("wrap"), "{item}");
-    let out = expand(ExpandRequest {
-        filename: "stmt.sts",
-        code: &source("stmt"),
-        phase: Phase::Check,
-    });
+    let out =
+        expand(ExpandRequest { filename: "stmt.sts", code: &source("stmt"), phase: Phase::Check });
     assert!(
-        out.diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.starts_with("SWR4001")),
+        out.diagnostics.iter().any(|diagnostic| diagnostic.message.starts_with("SWR4001")),
         "{:?}",
         out.diagnostics
     );
@@ -860,11 +726,7 @@ const c = x |> 1 + %;\n\
 const d = x |> f(%) + %;\n\
 const e = x |> % |> % + 1;\n"
     );
-    let out = expand(ExpandRequest {
-        filename: "pipe.sts",
-        code: &source,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "pipe.sts", code: &source, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     let code = out.code.split_whitespace().collect::<Vec<_>>().join(" ");
     for piece in [
@@ -887,10 +749,7 @@ const e = x |> % |> % + 1;\n"
         if segment.kind == SegmentKind::Verbatim {
             assert_eq!(original, text);
         } else if text.contains("topic") {
-            assert!(
-                original.contains("|>") && original.contains('%'),
-                "{original:?} -> {text:?}"
-            );
+            assert!(original.contains("|>") && original.contains('%'), "{original:?} -> {text:?}");
         }
     }
     assert_eq!(at as usize, out.code.len());
@@ -901,16 +760,9 @@ const e = x |> % |> % + 1;\n"
 #[test]
 fn parameter_misuse_diagnostics() {
     let code = format!("{HACK_PIPE}const a = 1 |> foo + 1;\nconst b = %;\n");
-    let out = expand(ExpandRequest {
-        filename: "pipe.sts",
-        code: &code,
-        phase: Phase::Check,
-    });
-    let codes: Vec<&str> = out
-        .diagnostics
-        .iter()
-        .map(|diagnostic| &diagnostic.message[..7])
-        .collect();
+    let out = expand(ExpandRequest { filename: "pipe.sts", code: &code, phase: Phase::Check });
+    let codes: Vec<&str> =
+        out.diagnostics.iter().map(|diagnostic| &diagnostic.message[..7]).collect();
     assert_eq!(codes, ["SWR4022", "SWR4018"], "{:?}", out.diagnostics);
     let at = out.diagnostics[1].start as usize;
     assert_eq!(&code[at..at + 1], "%");
@@ -926,11 +778,7 @@ fn binding_contracts_are_checked() {
 export syntax b:expr {\n  rule { b $x:ident $v:expr }\n  bind $x in $v as lexical type;\n  => { $v }\n}\n\
 export syntax c:stmt {\n  rule { c $x:expr $v:expr }\n  bind $x in $v as lexical value;\n  => { $v; }\n}\n\
 export syntax d:item {\n  rule { d $x:ident $v:expr }\n  bind $x in following as recursive value;\n  bind $x in $v as sequential\n  => { const $x = $v; }\n}\n";
-    let out = expand(ExpandRequest {
-        filename: "bind.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "bind.sts", code, phase: Phase::Check });
     let found: Vec<(&str, &str)> = out
         .diagnostics
         .iter()
@@ -975,11 +823,7 @@ const a = sum(1, 2, 3);\nconst e = sum();\nconst t = 1;\nmk 5;\nlet p = 1, q = 2
         assert!(code.contains(piece), "missing {piece}: {code}");
     }
     let bad = "export syntax w:stmt {\n  rule { w $a:ident; } => { #capture(result) = 1; #fresh(\"two words\"); }\n}\nw x;\n";
-    let out = expand(ExpandRequest {
-        filename: "bad.sts",
-        code: bad,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "bad.sts", code: bad, phase: Phase::Check });
     let messages: Vec<&str> = out.diagnostics.iter().map(|d| d.message.as_str()).collect();
     assert_eq!(
         messages,
@@ -1003,16 +847,10 @@ fn hygiene_counts_only_names_the_output_spells() {
 wrap function C({ id }) { }\n\
 ";
     let consumed = expand_ok("hygiene.sts", code);
-    assert!(
-        consumed.contains("const { id } = input; return id;"),
-        "{consumed}"
-    );
+    assert!(consumed.contains("const { id } = input; return id;"), "{consumed}");
     let kept = format!("{code}const id = 1;\n");
     let kept = expand_ok("hygiene.sts", &kept);
-    assert!(
-        kept.contains("const { id: id_1 } = input; return id_1;"),
-        "{kept}"
-    );
+    assert!(kept.contains("const { id: id_1 } = input; return id_1;"), "{kept}");
 }
 
 /// Upstream reports `const x = foo 1;` where its reader stopped (`1`), and
@@ -1020,11 +858,7 @@ wrap function C({ id }) { }\n\
 #[test]
 fn unread_item_two_operands_point_at_the_second() {
     let code = "const x = foo 1;\nconst y = 2;\nlet z = a b c\nvar w = 3;\nconst k = foo \"s\";\nconst m = x as any;\n";
-    let out = expand(ExpandRequest {
-        filename: "t.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "t.sts", code, phase: Phase::Check });
     let lines: Vec<(usize, usize)> = out
         .diagnostics
         .iter()
@@ -1036,11 +870,7 @@ fn unread_item_two_operands_point_at_the_second() {
         })
         .collect();
     assert_eq!(lines, vec![(1, 15), (3, 11), (5, 15)]);
-    assert!(
-        out.diagnostics
-            .iter()
-            .all(|d| d.severity == Severity::Warning)
-    );
+    assert!(out.diagnostics.iter().all(|d| d.severity == Severity::Warning));
     assert_eq!(
         out.diagnostics[0].related[0].message,
         "The reader expected ';' or automatic terminator here."
@@ -1053,18 +883,10 @@ fn unread_item_two_operands_point_at_the_second() {
 #[test]
 fn incomplete_variable_swallows_later_unread_items() {
     let code = "var stuff = (f) => (x) => {\n  return f(x);\n}\n\n@stuff\nfunction test(x, y) {\n  return 3 + 3\n}\n\nlet (-) = macro {\n  rule { $x } => { $x }\n}\n";
-    let out = expand(ExpandRequest {
-        filename: "t.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "t.sts", code, phase: Phase::Check });
     assert_eq!(codes(&out), Vec::<String>::new());
     let alone = "let (-) = macro {\n  rule { $x } => { $x }\n}\n";
-    let out = expand(ExpandRequest {
-        filename: "t.sts",
-        code: alone,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "t.sts", code: alone, phase: Phase::Check });
     assert_eq!(codes(&out), vec!["SWR4025"]);
     assert_eq!(out.diagnostics[0].related[0].start, 4);
 }
@@ -1093,10 +915,7 @@ fn expr_hole_stops_before_brace_block_after_operand() {
         "export syntax handle:stmt {\n  rule { handle $t:expr { $($b:stmt)* } } => {\n    try { $($b)* } catch (e) { $t(e); }\n  }\n}\n\
 handle report { work(); }\nconst f = function () { return 1; };\n",
     );
-    assert!(
-        code.contains("try { work(); } catch (e) { report(e); }"),
-        "{code}"
-    );
+    assert!(code.contains("try { work(); } catch (e) { report(e); }"), "{code}");
 }
 
 #[test]
@@ -1113,11 +932,7 @@ fn expansion_cycles_and_depth_are_budgeted() {
             "const a = grow(1);",
         ),
     ] {
-        let out = expand(ExpandRequest {
-            filename: "budget.sts",
-            code,
-            phase: Phase::Check,
-        });
+        let out = expand(ExpandRequest { filename: "budget.sts", code, phase: Phase::Check });
         assert_eq!(out.diagnostics.len(), 1, "{:?}", out.diagnostics);
         assert!(out.diagnostics[0].message.starts_with(expected));
         let at = out.diagnostics[0].start as usize;
@@ -1131,16 +946,8 @@ fn deep_nesting_is_honored_up_to_the_budget() {
     // re-expansion, well past what a default thread stack holds.
     let defs = "export syntax peel:expr {\n  rule { peel(($x:expr)) } => { peel($x) }\n  rule { peel($x:expr) } => { $x }\n}\n";
     let deep = 1000;
-    let code = format!(
-        "{defs}const a = peel({}0{});\n",
-        "(".repeat(deep),
-        ")".repeat(deep)
-    );
-    let request = || ExpandRequest {
-        filename: "deep.sts",
-        code: &code,
-        phase: Phase::Check,
-    };
+    let code = format!("{defs}const a = peel({}0{});\n", "(".repeat(deep), ")".repeat(deep));
+    let request = || ExpandRequest { filename: "deep.sts", code: &code, phase: Phase::Check };
     let out = expand(request());
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     assert!(
@@ -1150,10 +957,7 @@ fn deep_nesting_is_honored_up_to_the_budget() {
     );
     let shallow = expand_with_budget(
         request(),
-        ResourceBudget {
-            max_nesting_depth: 100,
-            ..ResourceBudget::default()
-        },
+        ResourceBudget { max_nesting_depth: 100, ..ResourceBudget::default() },
     );
     assert!(
         shallow.diagnostics.iter().any(|d| d
@@ -1164,16 +968,8 @@ fn deep_nesting_is_honored_up_to_the_budget() {
     );
     // User-written nesting: 1000 macro calls inside each other.
     let twice = "export syntax wrap:expr {\n  rule { wrap($x:expr) } => { [$x] }\n}\n";
-    let code = format!(
-        "{twice}const b = {}0{};\n",
-        "wrap(".repeat(deep),
-        ")".repeat(deep)
-    );
-    let out = expand(ExpandRequest {
-        filename: "deep2.sts",
-        code: &code,
-        phase: Phase::Check,
-    });
+    let code = format!("{twice}const b = {}0{};\n", "wrap(".repeat(deep), ")".repeat(deep));
+    let out = expand(ExpandRequest { filename: "deep2.sts", code: &code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     let expected = format!("const b = {}0{};", "[".repeat(deep), "]".repeat(deep));
     assert!(out.code.contains(&expected));
@@ -1186,10 +982,7 @@ fn check_map(code: &str, out: &ts_ext_sweetener::Expansion) -> Result<(), String
     let mut last = 0;
     for segment in &out.segments {
         let (vs, ve) = (segment.virtual_start as usize, segment.virtual_end as usize);
-        let (os, oe) = (
-            segment.original_start as usize,
-            segment.original_end as usize,
-        );
+        let (os, oe) = (segment.original_start as usize, segment.original_end as usize);
         if vs < last || ve < vs || ve > out.code.len() || oe < os || oe > code.len() {
             return Err(format!("bad segment {segment:?}"));
         }
@@ -1220,18 +1013,10 @@ fn check_map(code: &str, out: &ts_ext_sweetener::Expansion) -> Result<(), String
 /// points at: the user's code the map lost.
 fn lost_user_words(code: &str, out: &ts_ext_sweetener::Expansion) -> Vec<String> {
     let word = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
-    let mapped: std::collections::HashSet<u32> = out
-        .origins
-        .iter()
-        .filter(|o| !o.introduced)
-        .map(|o| o.original_start)
-        .collect();
+    let mapped: rustc_hash::FxHashSet<u32> =
+        out.origins.iter().filter(|o| !o.introduced).map(|o| o.original_start).collect();
     let mut lost = Vec::new();
-    for o in out
-        .origins
-        .iter()
-        .filter(|o| o.introduced && o.original_end > o.original_start)
-    {
+    for o in out.origins.iter().filter(|o| o.introduced && o.original_end > o.original_start) {
         let printed = &out.code[o.virtual_start as usize..o.virtual_end as usize];
         if !printed.chars().next().is_some_and(word) {
             continue;
@@ -1274,11 +1059,7 @@ fn every_case_keeps_an_exact_map() {
         }
         // How much of the user's code inside invocations kept its origin.
         user += out.origins.len();
-        exact += out
-            .origins
-            .iter()
-            .filter(|origin| !origin.introduced)
-            .count();
+        exact += out.origins.iter().filter(|origin| !origin.introduced).count();
         let lost = lost_user_words(&code, &out);
         if !lost.is_empty() {
             lost_cases.push(format!("{dir}: {}", lost.join(" ")));
@@ -1296,26 +1077,14 @@ fn captures_map_to_their_own_source_tokens() {
     let defs = "export syntax pair:expr {\n  rule { pair($a:expr, $b:expr) } => { [$b, $a, $b] }\n}\nexport syntax tmp:expr {\n  rule { tmp($x:expr) } => { (() => { const t = $x; return t + t; })() }\n}\nexport syntax nest:expr {\n  rule { nest($x:expr) } => { pair($x, 0) }\n}\nexport syntax all:expr {\n  rule { all($($x:expr),*) } => { [$($x + 1),*] }\n}\n";
     let body = "const t = 1;\nconst a = pair(x, x);\nconst b = tmp(t);\nconst c = nest(y.z);\nconst d = all(p, q, p);\n";
     let code = format!("{defs}{body}");
-    let out = expand(ExpandRequest {
-        filename: "map.sts",
-        code: &code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "map.sts", code: &code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     check_map(&code, &out).unwrap();
     // From an output position, recover the original position and text.
     let original = |needle: &str, nth: usize| -> (usize, String) {
         let at = out.code.match_indices(needle).nth(nth).unwrap().0;
-        let origin = out
-            .origins
-            .iter()
-            .find(|origin| origin.virtual_start as usize == at)
-            .unwrap();
-        assert!(
-            !origin.introduced,
-            "{needle}#{nth} introduced: {}",
-            out.code
-        );
+        let origin = out.origins.iter().find(|origin| origin.virtual_start as usize == at).unwrap();
+        assert!(!origin.introduced, "{needle}#{nth} introduced: {}", out.code);
         let (s, e) = (origin.original_start as usize, origin.original_end as usize);
         (s, code[s..e].to_owned())
     };
@@ -1331,11 +1100,7 @@ fn captures_map_to_their_own_source_tokens() {
     let user_t = code.find("tmp(t)").unwrap() + 4;
     let printed = out.code.find("const b = ").unwrap();
     let t_at = out.code[printed..].find("= t;").unwrap() + printed + 2;
-    let origin = out
-        .origins
-        .iter()
-        .find(|o| o.virtual_start as usize == t_at)
-        .unwrap();
+    let origin = out.origins.iter().find(|o| o.virtual_start as usize == t_at).unwrap();
     assert_eq!(
         (origin.original_start as usize, origin.introduced),
         (user_t, false),
@@ -1348,50 +1113,26 @@ fn captures_map_to_their_own_source_tokens() {
     // Repetition rows keep their own tokens.
     let p2 = code.find("q, p)").unwrap() + 3;
     let last_p = out.code.rfind("p + 1").unwrap();
-    let origin = out
-        .origins
-        .iter()
-        .find(|o| o.virtual_start as usize == last_p)
-        .unwrap();
-    assert_eq!(
-        (origin.original_start as usize, origin.introduced),
-        (p2, false),
-        "{}",
-        out.code
-    );
+    let origin = out.origins.iter().find(|o| o.virtual_start as usize == last_p).unwrap();
+    assert_eq!((origin.original_start as usize, origin.introduced), (p2, false), "{}", out.code);
     // Nested traces carry their own span: `pair` from `nest` covers `y.z`
     // only where it is the user's; its head is the template's, so it is the
     // `nest` invocation.
     let nest_at = code.find("nest(y.z)").unwrap() as u32;
-    let pair = out
-        .traces
-        .iter()
-        .find(|t| t.macro_name == "pair" && t.depth == 1)
-        .unwrap();
+    let pair = out.traces.iter().find(|t| t.macro_name == "pair" && t.depth == 1).unwrap();
     assert_eq!(pair.start, nest_at);
 }
 
 #[test]
 fn traces_and_token_origins() {
     let code = "export syntax twice:expr {\n  rule { twice($x:expr) } => { [$x, $x] }\n}\nexport syntax outer:expr {\n  rule { outer($x:expr) } => { twice($x) }\n}\nconst a = outer(value);\nconst b = 1;\n";
-    let out = expand(ExpandRequest {
-        filename: "trace.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "trace.sts", code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
-    assert!(
-        out.code.contains("const a = [value, value];"),
-        "{}",
-        out.code
-    );
+    assert!(out.code.contains("const a = [value, value];"), "{}", out.code);
     let call = code.find("outer(value)").unwrap() as u32;
     let call_end = call + "outer(value)".len() as u32;
-    let names: Vec<(&str, u32)> = out
-        .traces
-        .iter()
-        .map(|trace| (trace.macro_name.as_str(), trace.depth))
-        .collect();
+    let names: Vec<(&str, u32)> =
+        out.traces.iter().map(|trace| (trace.macro_name.as_str(), trace.depth)).collect();
     assert_eq!(names, [("outer", 0), ("twice", 1)], "{:?}", out.traces);
     for trace in &out.traces {
         assert_eq!((trace.start, trace.end), (call, call_end));
@@ -1400,80 +1141,35 @@ fn traces_and_token_origins() {
     // Every output token has one origin, in order.
     let at = out.code.find("[value, value]").unwrap() as u32;
     let origin = |virtual_start: u32| {
-        out.origins
-            .iter()
-            .find(|origin| origin.virtual_start == virtual_start)
-            .copied()
-            .unwrap()
+        out.origins.iter().find(|origin| origin.virtual_start == virtual_start).copied().unwrap()
     };
     let bracket = origin(at);
     assert!(bracket.introduced);
-    assert_eq!(
-        (bracket.original_start, bracket.original_end),
-        (call, call_end)
-    );
+    assert_eq!((bracket.original_start, bracket.original_end), (call, call_end));
     let value = origin(at + 1);
     assert!(!value.introduced);
     let value_at = code.find("value)").unwrap() as u32;
-    assert_eq!(
-        (value.original_start, value.original_end),
-        (value_at, value_at + 5)
-    );
+    assert_eq!((value.original_start, value.original_end), (value_at, value_at + 5));
     let second = origin(at + "[value, ".len() as u32);
-    assert_eq!(
-        (second.original_start, second.introduced),
-        (value_at, false)
-    );
+    assert_eq!((second.original_start, second.introduced), (value_at, false));
     let b = origin(out.code.find("b = 1").unwrap() as u32);
     let b_at = code.find("b = 1").unwrap() as u32;
     assert_eq!((b.original_start, b.introduced), (b_at, false));
-    assert!(
-        out.origins
-            .windows(2)
-            .all(|w| w[0].virtual_end <= w[1].virtual_start)
-    );
+    assert!(out.origins.windows(2).all(|w| w[0].virtual_end <= w[1].virtual_start));
 }
 
 #[test]
 fn resource_budgets_stop_expansion_with_swr4015() {
     let code = "export syntax twice:expr {\n  rule { twice($x:expr) } => { [$x, $x] }\n}\nconst a = twice(1);\nconst b = twice(2);\n";
-    let request = || ExpandRequest {
-        filename: "budget.sts",
-        code,
-        phase: Phase::Check,
-    };
+    let request = || ExpandRequest { filename: "budget.sts", code, phase: Phase::Check };
     let fine = expand(request());
     assert!(fine.diagnostics.is_empty(), "{:?}", fine.diagnostics);
     assert!(fine.code.contains("const b = [2, 2];"), "{}", fine.code);
     for (budget, kind) in [
-        (
-            ResourceBudget {
-                max_expansion_steps: 1,
-                ..ResourceBudget::default()
-            },
-            "expansion-steps",
-        ),
-        (
-            ResourceBudget {
-                max_output_tokens: 3,
-                ..ResourceBudget::default()
-            },
-            "output-tokens",
-        ),
-        (
-            ResourceBudget {
-                max_input_tokens: 5,
-                ..ResourceBudget::default()
-            },
-            "input-tokens",
-        ),
-        (
-            ResourceBudget {
-                max_matcher_steps: 1,
-                ..ResourceBudget::default()
-            },
-            "matcher-steps",
-        ),
+        (ResourceBudget { max_expansion_steps: 1, ..ResourceBudget::default() }, "expansion-steps"),
+        (ResourceBudget { max_output_tokens: 3, ..ResourceBudget::default() }, "output-tokens"),
+        (ResourceBudget { max_input_tokens: 5, ..ResourceBudget::default() }, "input-tokens"),
+        (ResourceBudget { max_matcher_steps: 1, ..ResourceBudget::default() }, "matcher-steps"),
         (
             ResourceBudget {
                 deadline: Some(std::time::Duration::ZERO),
@@ -1491,11 +1187,7 @@ fn resource_budgets_stop_expansion_with_swr4015() {
             "{kind}: {:?}",
             out.diagnostics
         );
-        assert!(
-            out.code.contains("const b = twice(2);"),
-            "{kind}: {}",
-            out.code
-        );
+        assert!(out.code.contains("const b = twice(2);"), "{kind}: {}", out.code);
     }
 }
 
@@ -1522,11 +1214,7 @@ fn context_clauses_select_rules_by_yield_and_await() {
     let bad = format!(
         "{defs}export syntax odd:expr {{\n  rule {{ odd() }}\n  context weird;\n  => {{ 1 }}\n}}\nfunction h() {{ return wait(4); }}\n"
     );
-    let out = expand(ExpandRequest {
-        filename: "bad.sts",
-        code: &bad,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "bad.sts", code: &bad, phase: Phase::Check });
     let messages: Vec<&str> = out.diagnostics.iter().map(|d| d.message.as_str()).collect();
     assert_eq!(
         messages,
@@ -1543,11 +1231,7 @@ fn operator_right_operand_literal_run_and_arrow() {
         "pipe.sts",
         "export operator (|>):expr {\n  fixity infix;\n  associativity left;\n  precedence 1;\n  operand arrow;\n  rule { $value:expr |> await } => { await $value }\n  rule { $value:expr |> $f:expr } => { $f($value) }\n}\nconst a = 1 |> n => f(n) |> g;\nasync function h(p) { return p |> await |> f; }\nconst c = x |> double;\n",
     );
-    for piece in [
-        "const a = g((n => f(n))(1));",
-        "return f(await p);",
-        "const c = double(x);",
-    ] {
+    for piece in ["const a = g((n => f(n))(1));", "return f(await p);", "const c = double(x);"] {
         assert!(code.contains(piece), "missing {piece}: {code}");
     }
 }
@@ -1588,11 +1272,7 @@ fn definition_diagnostics_from_upstream_compilers() {
             "SWR4006: Invalid operator +++: fixity must be prefix, infix, or postfix.",
         ),
     ] {
-        let out = expand(ExpandRequest {
-            filename: "defs.sts",
-            code,
-            phase: Phase::Check,
-        });
+        let out = expand(ExpandRequest { filename: "defs.sts", code, phase: Phase::Check });
         let messages: Vec<&str> = out.diagnostics.iter().map(|d| d.message.as_str()).collect();
         assert_eq!(messages, [expected], "{code}");
     }
@@ -1656,18 +1336,9 @@ fn rule_failures_carry_related_locations() {
         code: "export syntax foo:stmt {\n  rule { foo $x:expr; } => { $x; }\n}\nfoo 1 2 3;\n",
         phase: Phase::Check,
     });
-    let related: Vec<&str> = out.diagnostics[0]
-        .related
-        .iter()
-        .map(|r| r.message.as_str())
-        .collect();
-    assert_eq!(
-        related,
-        [
-            "In this use of foo",
-            "The closest rule was still expecting syntax here"
-        ]
-    );
+    let related: Vec<&str> =
+        out.diagnostics[0].related.iter().map(|r| r.message.as_str()).collect();
+    assert_eq!(related, ["In this use of foo", "The closest rule was still expecting syntax here"]);
 }
 
 #[test]
@@ -1686,31 +1357,18 @@ fn runtime_imports_only_for_invoked_modules() {
     .unwrap();
     let filename = dir.join("main.sts");
     let run = |code: &str| {
-        expand(ExpandRequest {
-            filename: filename.to_str().unwrap(),
-            code,
-            phase: Phase::Check,
-        })
-        .code
+        expand(ExpandRequest { filename: filename.to_str().unwrap(), code, phase: Phase::Check })
+            .code
     };
     let imports = "import { wrap } from \"./used.sts\" for syntax;\nimport { nap } from \"./idle.sts\" for syntax;\n";
     let code = run(&format!("{imports}const a = wrap(1);\n"));
-    assert!(
-        code.contains("import { helper } from \"./used-rt.ts\";"),
-        "{code}"
-    );
+    assert!(code.contains("import { helper } from \"./used-rt.ts\";"), "{code}");
     assert!(!code.contains("idle-rt"), "{code}");
     assert!(code.contains("const a = helper(1);"), "{code}");
     let code = run(&format!("{imports}const a = 1;\n"));
-    assert!(
-        !code.contains("used-rt") && !code.contains("idle-rt"),
-        "{code}"
-    );
+    assert!(!code.contains("used-rt") && !code.contains("idle-rt"), "{code}");
     let code = run(&format!("{imports}const a = wrap(1);\nconst b = nap(2);\n"));
-    assert!(
-        code.contains("used-rt") && code.contains("idle-rt"),
-        "{code}"
-    );
+    assert!(code.contains("used-rt") && code.contains("idle-rt"), "{code}");
     fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -1740,11 +1398,8 @@ fn macro_module_import_diagnostics() {
             code,
             phase: Phase::Check,
         });
-        let mut codes: Vec<String> = out
-            .diagnostics
-            .iter()
-            .map(|d| d.message[..7].to_owned())
-            .collect();
+        let mut codes: Vec<String> =
+            out.diagnostics.iter().map(|d| d.message[..7].to_owned()).collect();
         codes.sort();
         codes
     };
@@ -1787,11 +1442,7 @@ const o = {
   },
 };
 "#;
-    let out = expand(ExpandRequest {
-        filename: "do.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "do.sts", code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     let flat: String = out.code.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
@@ -1830,11 +1481,7 @@ const f = fn(value) {
 };
 effect run { 1 }
 "#;
-    let out = expand(ExpandRequest {
-        filename: "core.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "core.sts", code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     let flat: String = out.code.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
@@ -1867,17 +1514,10 @@ data Tree<T> = Leaf() | Node(left: Tree<T>, value: T);
 const p = pick { Leaf() => 0, Node(l, v) => v, _ => 9 };
 skip;
 "#;
-    let out = expand(ExpandRequest {
-        filename: "adt.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "adt.sts", code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     let flat: String = out.code.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(
-        flat.contains(r#"const Leaf = <T>() => ({ tag: "Leaf" });"#),
-        "{flat}"
-    );
+    assert!(flat.contains(r#"const Leaf = <T>() => ({ tag: "Leaf" });"#), "{flat}");
     assert!(
         flat.contains(
             r#"const Node = <T>(left: Tree<T>, value: T) => ({ tag: "Node" , left, value });"#
@@ -1899,15 +1539,10 @@ fn braced_jsx_child_macros() {
 }
 const a = <ul>{when (x)}<li>a <b>c</b></li>{else}<br/>{end}{when (y)} <i/> {end}</ul>;
 "#;
-    let out = expand(ExpandRequest {
-        filename: "j.stsx",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "j.stsx", code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     assert!(
-        out.code
-            .contains("<ul>{(x) ? <li>a <b>c</b></li> : <br/>}{(y) ? <i/> : null}</ul>"),
+        out.code.contains("<ul>{(x) ? <li>a <b>c</b></li> : <br/>}{(y) ? <i/> : null}</ul>"),
         "{}",
         out.code
     );
@@ -1916,11 +1551,7 @@ const a = <ul>{when (x)}<li>a <b>c</b></li>{else}<br/>{end}{when (y)} <i/> {end}
 #[test]
 fn unicode_identifiers_expand() {
     let code = "export syntax pair:expr {\n  rule { pair($a:expr, $b:expr) } => { [$b, $a] }\n}\nconst ünï = 1, 名前 = 2;\nconst a = pair(ünï, 名前);\n";
-    let out = expand(ExpandRequest {
-        filename: "u.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "u.sts", code, phase: Phase::Check });
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     assert!(out.code.contains("[名前, ünï]"), "{}", out.code);
     check_map(code, &out).unwrap();
@@ -1941,11 +1572,7 @@ fn assert_exact(
         .iter()
         .find(|origin| origin.virtual_start as usize == at)
         .unwrap_or_else(|| panic!("no origin at {needle}#{nth}: {}", out.code));
-    assert!(
-        !origin.introduced,
-        "{needle}#{nth} introduced: {}",
-        out.code
-    );
+    assert!(!origin.introduced, "{needle}#{nth} introduced: {}", out.code);
     let want = code.match_indices(needle).nth(source_nth).unwrap().0;
     assert_eq!(origin.original_start as usize, want, "{needle}#{nth}");
 }
@@ -1954,27 +1581,15 @@ fn assert_exact(
 fn template_holes_chains_and_procedural_forms_keep_exact_origins() {
     // `${... |> f}` inside a template literal.
     let code = "export operator (|>):expr {\n  fixity infix;\n  associativity left;\n  precedence 40;\n  rule { $value:expr |> $callee:ident } => { $callee($value) }\n}\nconst s = `${user.id}:${user.total |> cents}`;\n";
-    let out = expand(ExpandRequest {
-        filename: "t.sts",
-        code,
-        phase: Phase::Check,
-    });
-    assert!(
-        out.code.contains("`${user.id}:${cents(user.total)}`"),
-        "{}",
-        out.code
-    );
+    let out = expand(ExpandRequest { filename: "t.sts", code, phase: Phase::Check });
+    assert!(out.code.contains("`${user.id}:${cents(user.total)}`"), "{}", out.code);
     check_map(code, &out).unwrap();
     assert_exact(code, &out, "cents", 0, 0);
     assert_exact(code, &out, "total", 0, 0);
     assert_exact(code, &out, "user", 0, 0);
     // A left-associative chain re-expanded as one operand.
     let code = "export syntax class Callee {\n  fields { name: ident; }\n  rule { $name:ident }\n}\nexport operator (|>>):expr {\n  fixity infix;\n  associativity left;\n  precedence 40;\n  rule { $value:expr |>> $f:Callee } => { $f.name($value) }\n}\nconst r = alpha |>> first |>> second;\n";
-    let out = expand(ExpandRequest {
-        filename: "c.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "c.sts", code, phase: Phase::Check });
     assert!(out.code.contains("second(first(alpha))"), "{}", out.code);
     check_map(code, &out).unwrap();
     for word in ["alpha", "first", "second"] {
@@ -1982,26 +1597,15 @@ fn template_holes_chains_and_procedural_forms_keep_exact_origins() {
     }
     // A procedural form (printed as source by the form pass).
     let code = "export syntax class Step {\n  fields { name: binding?; value: expr?; rest: stmt?; }\n  rule { $name:binding <- $value:expr; }\n  rule { $rest:stmt }\n}\nexport syntax gen:expr {\n  rule { gen { $($step:Step)+ } } => {\n    Effect.gen(function* () {\n        $(#if(present $step.name) { const $step.name = yield* $step.value; }\n            #else { $step.rest })*\n      })\n  }\n}\nexport syntax class Field {\n  fields { name: ident; kind: type; }\n  rule { $name:ident : $kind:type }\n}\nexport syntax effect:item {\n  rule { effect $name:binding($($parameter:Field),*) $body:tt }\n  => {\n    #core(export const $name = ($($parameter.name: $parameter.kind),*) =>\n      gen $body;)\n  }\n}\neffect report(id: string) {\n  user <- lookup(id);\n  const count = user.length;\n}\n";
-    let out = expand(ExpandRequest {
-        filename: "e.sts",
-        code,
-        phase: Phase::Check,
-    });
+    let out = expand(ExpandRequest { filename: "e.sts", code, phase: Phase::Check });
     check_map(code, &out).unwrap();
     assert_exact(code, &out, "report", 0, 0);
     assert_exact(code, &out, "lookup", 0, 0);
     assert_exact(code, &out, "count", 0, 0);
     let user = code.find("user <-").unwrap();
     let at = out.code.find("user =").unwrap();
-    let origin = out
-        .origins
-        .iter()
-        .find(|o| o.virtual_start as usize == at)
-        .unwrap();
-    assert_eq!(
-        (origin.original_start as usize, origin.introduced),
-        (user, false)
-    );
+    let origin = out.origins.iter().find(|o| o.virtual_start as usize == at).unwrap();
+    assert_eq!((origin.original_start as usize, origin.introduced), (user, false));
 }
 
 /// Seeded xorshift64. Deterministic so this runs as an ordinary unit test.
@@ -2018,11 +1622,7 @@ impl Rng {
     }
 
     fn below(&mut self, n: usize) -> usize {
-        if n == 0 {
-            0
-        } else {
-            (self.next_u64() as usize) % n
-        }
+        if n == 0 { 0 } else { (self.next_u64() as usize) % n }
     }
 }
 
@@ -2150,11 +1750,7 @@ fn random_expr(rng: &mut Rng, depth: usize) -> String {
             s
         }
         3 => format!("({} )", random_expr(rng, depth - 1)),
-        _ => format!(
-            "{} + {}",
-            random_expr(rng, depth - 1),
-            random_expr(rng, depth - 1)
-        ),
+        _ => format!("{} + {}", random_expr(rng, depth - 1), random_expr(rng, depth - 1)),
     }
 }
 
@@ -2191,10 +1787,7 @@ fn boundary_programs() -> Vec<String> {
 /// Insert, delete, or replace at a character boundary, never mid-scalar.
 fn edit_at_char_boundary(rng: &mut Rng, code: &mut String) {
     let bounds: Vec<usize> = code.char_indices().map(|(i, _)| i).collect();
-    let at = bounds
-        .get(rng.below(bounds.len().max(1)))
-        .copied()
-        .unwrap_or(0);
+    let at = bounds.get(rng.below(bounds.len().max(1))).copied().unwrap_or(0);
     match rng.below(3) {
         0 => {
             let insert = random_atom(rng).to_owned();
@@ -2241,23 +1834,15 @@ fn random_unicode_edits_keep_an_exact_map() {
         // Edits land in the definitions as well as the body.
         for _ in 0..12 {
             edit_at_char_boundary(&mut rng, &mut code);
-            let out = expand(ExpandRequest {
-                filename: "fuzz.sts",
-                code: &code,
-                phase: Phase::Check,
-            });
+            let out =
+                expand(ExpandRequest { filename: "fuzz.sts", code: &code, phase: Phase::Check });
             assert!(
-                out.diagnostics
-                    .iter()
-                    .all(|d| !d.message.contains("internal error")),
+                out.diagnostics.iter().all(|d| !d.message.contains("internal error")),
                 "seed {seed} panicked on {code:?}: {:?}",
                 out.diagnostics
             );
             if let Err(why) = check_map(&code, &out) {
-                panic!(
-                    "seed {seed} map {why}\nsource: {code:?}\nout: {:?}",
-                    out.code
-                );
+                panic!("seed {seed} map {why}\nsource: {code:?}\nout: {:?}", out.code);
             }
         }
     }

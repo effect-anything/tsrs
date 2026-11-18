@@ -1,8 +1,58 @@
-//!
 //! Sweetener expansion: ordinary TypeScript plus a span map. This crate
 //! does not rewrite `"use gpu"`. `ts_ext_syntax` is the content mapper: it
 //! calls [`expand`], then `ts_ext_typegpu`. Cases, `cases.jsonl`, and the
 //! discover/sync tools live in this crate. One directory is one program.
+
+#![expect(
+    clippy::assigning_clones,
+    clippy::borrow_as_ptr,
+    clippy::clone_on_ref_ptr,
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::collection_is_never_read,
+    clippy::elidable_lifetime_names,
+    clippy::format_push_string,
+    clippy::get_unwrap,
+    clippy::if_same_then_else,
+    clippy::int_plus_one,
+    clippy::items_after_statements,
+    clippy::manual_assert,
+    clippy::manual_is_variant_and,
+    clippy::manual_let_else,
+    clippy::manual_pattern_char_comparison,
+    clippy::manual_range_contains,
+    clippy::manual_string_new,
+    clippy::map_unwrap_or,
+    clippy::match_same_arms,
+    clippy::match_wildcard_for_single_variants,
+    clippy::needless_borrow,
+    clippy::needless_continue,
+    clippy::needless_lifetimes,
+    clippy::needless_pass_by_value,
+    clippy::needless_return,
+    clippy::nonminimal_bool,
+    clippy::only_used_in_recursion,
+    clippy::option_option,
+    clippy::question_mark,
+    clippy::range_plus_one,
+    clippy::rc_buffer,
+    clippy::redundant_clone,
+    clippy::redundant_closure,
+    clippy::redundant_closure_for_method_calls,
+    clippy::redundant_guards,
+    clippy::redundant_pub_crate,
+    clippy::result_large_err,
+    clippy::return_and_then,
+    clippy::semicolon_if_nothing_returned,
+    clippy::sliced_string_as_bytes,
+    clippy::too_long_first_doc_paragraph,
+    clippy::trivially_copy_pass_by_ref,
+    clippy::unnecessary_wraps,
+    clippy::unneeded_wildcard_pattern,
+    clippy::unnested_or_patterns,
+    clippy::unused_self,
+    reason = "sweetener port"
+)]
 
 pub mod catalog;
 pub mod structure;
@@ -153,7 +203,7 @@ pub struct TokenOrigin {
 }
 
 impl Expansion {
-    /// Segments in the shape `ts_goport`'s `spanmap::Segment` stores:
+    /// Segments in the shape `tsrs`'s `spanmap::Segment` stores:
     /// `i32` half-open offsets, kind `0` verbatim and `1` atom, features all.
     ///
     /// The language service already maps diagnostics through a `SpanMap`
@@ -187,9 +237,9 @@ impl Expansion {
                 continue;
             }
             return Some(match segment.kind {
-                SegmentKind::Verbatim => segment
-                    .original_start
-                    .saturating_add(virtual_offset - segment.virtual_start),
+                SegmentKind::Verbatim => {
+                    segment.original_start.saturating_add(virtual_offset - segment.virtual_start)
+                }
                 SegmentKind::Atom => segment.original_start,
             });
         }
@@ -267,11 +317,61 @@ pub fn incremental_stats() -> (usize, usize) {
 #[doc(hidden)]
 #[must_use]
 pub fn expand_unchecked(code: &str) -> Expansion {
-    sweetener_expand::expand_here(ExpandRequest {
-        filename: "fuzz.sts",
-        code,
-        phase: Phase::Check,
-    })
+    sweetener_expand::expand_here(ExpandRequest { filename: "fuzz.sts", code, phase: Phase::Check })
+}
+
+/// Expand `request` with the `#fresh("swrPanic")` panic test seam enabled on
+/// the expansion thread.
+#[doc(hidden)]
+#[must_use]
+pub fn expand_with_panic_hint(request: ExpandRequest<'_>) -> Expansion {
+    sweetener_hygiene::with_panic_hint(true, || expand(request))
+}
+
+#[doc(hidden)]
+pub mod __test_support {
+    pub mod cache {
+        pub use crate::sweetener_cache::{Claim, claim, read_module, take_probes};
+    }
+    pub mod context {
+        pub use crate::sweetener_context::{
+            Contexts, MODULE, NEITHER, Region, TOP, lookup, regions,
+        };
+    }
+    pub mod forms {
+        pub use crate::sweetener_forms::{
+            apply_signal_use, imported_syntax_bindings, join_ident, with_file_imports,
+        };
+    }
+    pub mod group {
+        pub use crate::sweetener_group::needs_group;
+    }
+    pub mod hygiene {
+        pub use crate::sweetener_hygiene::{PREFIX, assign, placeholder};
+    }
+    pub mod items {
+        pub use crate::sweetener_expand::items::{
+            Edit, UserNames, hash_debug, hash_debug_set, moved, placeholder_ids, renumber,
+            start_name_log, take_name_log,
+        };
+    }
+    pub mod origins {
+        pub use crate::sweetener_origins::{carry, lcs_pairs, retarget_segments, tokens};
+    }
+    pub mod reader {
+        pub use crate::sweetener_reader::{
+            Delimiter, ReadSyntax, Span, Syntax, read_syntax, slice, with_operators,
+        };
+    }
+    pub mod scoped {
+        pub use crate::sweetener_scoped::{
+            OPEN, Unused, hoist, hoist_marker, parameter_markers, region, resolve_parameters,
+            substitute,
+        };
+    }
+    pub mod validate {
+        pub use crate::sweetener_validate::{KnownClass, validate};
+    }
 }
 
 /// One step of [`expand_traced`].
@@ -312,11 +412,7 @@ pub enum TryResult {
     Matched { end: u32, text: String },
     /// Matching stopped at `at` (`near` is the token there). `expected` is
     /// the rule's or class's `expect` text.
-    Failed {
-        at: u32,
-        near: String,
-        expected: Option<String>,
-    },
+    Failed { at: u32, near: String, expected: Option<String> },
     /// The pattern matched but a `refine` clause or a written-prefix check
     /// refused it.
     Refused,

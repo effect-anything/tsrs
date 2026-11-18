@@ -17,9 +17,10 @@
 //! Hits return exactly what a fresh expansion returns; the cache tests
 //! compare them field by field.
 
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::sweetener_reader::{self, ReadSyntax};
 use crate::{Expansion, Phase, ResourceBudget};
@@ -28,16 +29,16 @@ use crate::{Expansion, Phase, ResourceBudget};
 const CAPACITY: usize = 256;
 
 fn hash_text(text: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
 }
 
 type ModuleKey = (String, Vec<String>);
 
-fn modules() -> &'static Mutex<HashMap<ModuleKey, Arc<ReadSyntax>>> {
-    static MODULES: OnceLock<Mutex<HashMap<ModuleKey, Arc<ReadSyntax>>>> = OnceLock::new();
-    MODULES.get_or_init(|| Mutex::new(HashMap::new()))
+fn modules() -> &'static Mutex<FxHashMap<ModuleKey, Arc<ReadSyntax>>> {
+    static MODULES: OnceLock<Mutex<FxHashMap<ModuleKey, Arc<ReadSyntax>>>> = OnceLock::new();
+    MODULES.get_or_init(|| Mutex::new(FxHashMap::default()))
 }
 
 /// One filesystem observation an expansion depended on. Misses count: a
@@ -53,17 +54,11 @@ pub enum Probe {
 impl Probe {
     fn observe_read(path: &std::path::Path) -> (Self, Option<String>) {
         let text = crate::source_reader::read(path);
-        (
-            Self::Read(path.to_path_buf(), text.as_deref().map(hash_text)),
-            text,
-        )
+        (Self::Read(path.to_path_buf(), text.as_deref().map(hash_text)), text)
     }
 
     fn observe_canonical(path: &std::path::Path) -> Self {
-        Self::Canonical(
-            path.to_path_buf(),
-            crate::source_reader::canonicalize(path).ok(),
-        )
+        Self::Canonical(path.to_path_buf(), crate::source_reader::canonicalize(path).ok())
     }
 
     fn still_holds(&self) -> bool {
@@ -151,9 +146,9 @@ struct FileEntry {
     probes: Vec<Probe>,
 }
 
-fn files() -> &'static Mutex<HashMap<FileKey, FileEntry>> {
-    static FILES: OnceLock<Mutex<HashMap<FileKey, FileEntry>>> = OnceLock::new();
-    FILES.get_or_init(|| Mutex::new(HashMap::new()))
+fn files() -> &'static Mutex<FxHashMap<FileKey, FileEntry>> {
+    static FILES: OnceLock<Mutex<FxHashMap<FileKey, FileEntry>>> = OnceLock::new();
+    FILES.get_or_init(|| Mutex::new(FxHashMap::default()))
 }
 
 fn file_key(filename: &str, code: &str, phase: Phase, budget: &ResourceBudget) -> FileKey {
@@ -169,20 +164,9 @@ fn still_current(probes: &[Probe]) -> bool {
     probes.iter().all(Probe::still_holds)
 }
 
-fn in_flight() -> &'static (
-    Mutex<std::collections::HashSet<FileKey>>,
-    std::sync::Condvar,
-) {
-    static IN_FLIGHT: OnceLock<(
-        Mutex<std::collections::HashSet<FileKey>>,
-        std::sync::Condvar,
-    )> = OnceLock::new();
-    IN_FLIGHT.get_or_init(|| {
-        (
-            Mutex::new(std::collections::HashSet::new()),
-            std::sync::Condvar::new(),
-        )
-    })
+fn in_flight() -> &'static (Mutex<FxHashSet<FileKey>>, std::sync::Condvar) {
+    static IN_FLIGHT: OnceLock<(Mutex<FxHashSet<FileKey>>, std::sync::Condvar)> = OnceLock::new();
+    IN_FLIGHT.get_or_init(|| (Mutex::new(FxHashSet::default()), std::sync::Condvar::new()))
 }
 
 /// This thread's right to expand one file; dropping it (stored or not)
@@ -256,10 +240,7 @@ pub fn store_file(
     }
     map.insert(
         file_key(filename, code, phase, budget),
-        FileEntry {
-            expansion: expansion.clone(),
-            probes,
-        },
+        FileEntry { expansion: expansion.clone(), probes },
     );
 }
 
@@ -270,53 +251,5 @@ pub fn clear() {
     }
     if let Ok(mut map) = files().lock() {
         map.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn module_reads_are_shared_per_text_and_operator_spellings() {
-        let text = "export syntax one:expr {\n  rule { one() } => { 1 @@ 2 }\n}\n";
-        let first = read_module(text);
-        let again = read_module(text);
-        assert!(Arc::ptr_eq(&first, &again));
-        let with_op = sweetener_reader::with_operators(&["@@".to_owned()], || read_module(text));
-        assert!(!Arc::ptr_eq(&first, &with_op));
-        assert_eq!(
-            *with_op,
-            sweetener_reader::with_operators(&["@@".to_owned()], || {
-                sweetener_reader::read_syntax(text)
-            })
-        );
-        assert_eq!(*first, sweetener_reader::read_syntax(text));
-        assert!(take_probes().is_empty());
-    }
-
-    /// A second request for a file being expanded waits for the first and
-    /// then looks again, instead of expanding it twice.
-    #[test]
-    fn an_identical_request_waits_for_the_running_expansion() {
-        let budget = ResourceBudget::default();
-        let code = "const claimed = 1;\n";
-        let first = claim("claim.sts", code, Phase::Check, &budget).expect("free");
-        let waiter = std::thread::spawn(move || {
-            let budget = ResourceBudget::default();
-            let started = std::time::Instant::now();
-            let second = claim("claim.sts", code, Phase::Check, &budget);
-            (second.is_none(), started.elapsed())
-        });
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        drop(first);
-        let (waited_then_looked_again, elapsed) = waiter.join().unwrap();
-        assert!(waited_then_looked_again);
-        assert!(
-            elapsed >= std::time::Duration::from_millis(90),
-            "{elapsed:?}"
-        );
-        // Nothing is running now: the next caller gets the claim.
-        assert!(claim("claim.sts", code, Phase::Check, &budget).is_some());
     }
 }

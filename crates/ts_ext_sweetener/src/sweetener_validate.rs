@@ -13,7 +13,7 @@
 
 use super::sweetener_reader::{Delimiter, Span, Syntax};
 use crate::{Diagnostic, Severity};
-use std::collections::{HashMap, HashSet};
+use tsrs_core::collections::{OrderedMap, OrderedSet};
 
 /// Builtin syntax classes (upstream's builtin registry).
 const BUILTIN_CLASSES: &[&str] = &[
@@ -45,7 +45,7 @@ const CATEGORIES: &[&str] = &[
 ];
 
 /// A class visible to this file: its name and declared fields.
-pub(crate) struct KnownClass {
+pub struct KnownClass {
     pub name: String,
     pub fields: Vec<String>,
 }
@@ -73,11 +73,7 @@ fn is(node: Option<&Syntax>, word: &str) -> bool {
 
 fn group(node: Option<&Syntax>, delimiter: Delimiter) -> Option<&[Syntax]> {
     match node? {
-        Syntax::Group {
-            delimiter: found,
-            children,
-            ..
-        } if *found == delimiter => Some(children),
+        Syntax::Group { delimiter: found, children, .. } if *found == delimiter => Some(children),
         _ => None,
     }
 }
@@ -93,10 +89,7 @@ fn error(message: String, at: Span) -> Diagnostic {
 }
 
 fn is_word(raw: &str) -> bool {
-    !raw.is_empty()
-        && raw
-            .chars()
-            .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '$')
+    !raw.is_empty() && raw.chars().all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '$')
 }
 
 /// One capture of a rule's pattern.
@@ -111,28 +104,25 @@ struct Capture {
 struct Validator<'a> {
     classes: &'a [KnownClass],
     /// Classes this file defines that failed to compile (SWR2009).
-    invalid_classes: HashSet<String>,
+    invalid_classes: OrderedSet<String>,
     out: Vec<Diagnostic>,
     next_group: usize,
     /// Definitions that failed to compile; upstream does not bind them.
-    invalid: HashSet<String>,
+    invalid: OrderedSet<String>,
     /// Names a binding literal's path may start from: globals and what the
     /// file declares or imports.
-    resolvable: HashSet<String>,
+    resolvable: OrderedSet<String>,
 }
 
 /// Check every definition in the file's top level, and report definitions
 /// written below it.
-pub(crate) fn validate(
-    nodes: &[Syntax],
-    classes: &[KnownClass],
-) -> (Vec<Diagnostic>, HashSet<String>) {
+pub fn validate(nodes: &[Syntax], classes: &[KnownClass]) -> (Vec<Diagnostic>, OrderedSet<String>) {
     let mut validator = Validator {
         classes,
-        invalid_classes: HashSet::new(),
+        invalid_classes: OrderedSet::default(),
         out: Vec::new(),
         next_group: 0,
-        invalid: HashSet::new(),
+        invalid: OrderedSet::default(),
         resolvable: declared_names(nodes),
     };
     // Classes first: a class failing SWR2009 is unresolved where it is used.
@@ -141,7 +131,7 @@ pub(crate) fn validate(
             validator.class_definition(nodes, index);
         }
     }
-    let mut seen: HashMap<String, (String, bool)> = HashMap::new();
+    let mut seen: OrderedMap<String, (String, bool)> = OrderedMap::default();
     let mut definition_bodies = Vec::new();
     let mut index = 0;
     while index < nodes.len() {
@@ -197,10 +187,7 @@ impl Validator<'_> {
                 || matches!(raw(nodes.get(index - 1)), Some(";" | "export"))
                 || matches!(
                     nodes.get(index - 1),
-                    Some(Syntax::Group {
-                        delimiter: Delimiter::Brace,
-                        ..
-                    })
+                    Some(Syntax::Group { delimiter: Delimiter::Brace, .. })
                 );
             if starts
                 && is(Some(node), "syntax")
@@ -237,9 +224,7 @@ impl Validator<'_> {
             {
                 // `rule { $l:Self ... }`: the class calls itself before
                 // reading anything.
-                let first = pattern
-                    .iter()
-                    .position(|node| !matches!(node, Syntax::Comment { .. }));
+                let first = pattern.iter().position(|node| !matches!(node, Syntax::Comment { .. }));
                 if let Some(first) = first
                     && is(pattern.get(first), "$")
                     && is(pattern.get(first + 2), ":")
@@ -264,17 +249,14 @@ impl Validator<'_> {
         nodes: &[Syntax],
         at: usize,
         exported: bool,
-        seen: &mut HashMap<String, (String, bool)>,
+        seen: &mut OrderedMap<String, (String, bool)>,
     ) {
         let operator = is(nodes.get(at), "operator");
         let name = if operator {
             let Some(spelling) = group(nodes.get(at + 1), Delimiter::Paren) else {
                 return;
             };
-            spelling
-                .iter()
-                .filter_map(|node| raw(Some(node)))
-                .collect::<String>()
+            spelling.iter().filter_map(|node| raw(Some(node))).collect::<String>()
         } else {
             match raw(nodes.get(at + 1)) {
                 Some(name) => name.to_owned(),
@@ -370,10 +352,7 @@ impl Validator<'_> {
         }
         // A malformed capture still reads as literal syntax upstream; every
         // other problem leaves the definition unbound.
-        if self.out[before..]
-            .iter()
-            .any(|diagnostic| !diagnostic.message.starts_with("SWR2002"))
-        {
+        if self.out[before..].iter().any(|diagnostic| !diagnostic.message.starts_with("SWR2002")) {
             self.invalid.insert(name);
         }
     }
@@ -418,16 +397,13 @@ impl Validator<'_> {
             None
         };
         if let Some(problem) = problem {
-            self.out.push(error(
-                format!("SWR4006: Invalid operator {name}: {problem}."),
-                keyword,
-            ));
+            self.out.push(error(format!("SWR4006: Invalid operator {name}: {problem}."), keyword));
         }
     }
 
     fn rule(&mut self, body: &[Syntax], rule_at: usize, pattern: &[Syntax]) {
-        let mut captures: HashMap<String, Capture> = HashMap::new();
-        let mut first_seen: HashMap<String, Span> = HashMap::new();
+        let mut captures: OrderedMap<String, Capture> = OrderedMap::default();
+        let mut first_seen: OrderedMap<String, Span> = OrderedMap::default();
         self.pattern(pattern, 0, &mut Vec::new(), &mut captures, &mut first_seen);
         // Clauses up to `=>`, then the template.
         let mut index = rule_at + 2;
@@ -450,13 +426,9 @@ impl Validator<'_> {
         if index >= body.len() {
             return;
         }
-        let template_at = if is(body.get(index), "=") {
-            index + 2
-        } else {
-            index + 1
-        };
+        let template_at = if is(body.get(index), "=") { index + 2 } else { index + 1 };
         if let Some(template) = group(body.get(template_at), Delimiter::Brace) {
-            let mut locals = HashSet::new();
+            let mut locals = OrderedSet::default();
             template_locals(template, &mut locals);
             self.template(template, 0, &captures, &locals);
         }
@@ -468,8 +440,8 @@ impl Validator<'_> {
         nodes: &[Syntax],
         depth: usize,
         stack: &mut Vec<usize>,
-        captures: &mut HashMap<String, Capture>,
-        first_seen: &mut HashMap<String, Span>,
+        captures: &mut OrderedMap<String, Capture>,
+        first_seen: &mut OrderedMap<String, Span>,
     ) -> bool {
         // Alternatives: a `|` with space on both sides.
         let mut cuts = Vec::new();
@@ -494,16 +466,13 @@ impl Validator<'_> {
                 let end = cuts.get(position).copied().unwrap_or(nodes.len());
                 let mut local = outer.clone();
                 let mut seen = outer_seen.clone();
-                let before: HashSet<String> = local.keys().cloned().collect();
+                let before: OrderedSet<String> = local.keys().cloned().collect();
                 nullable |= self.pattern(&nodes[*start..end], depth, stack, &mut local, &mut seen);
                 for (name, at) in seen {
                     first_seen.entry(name).or_insert(at);
                 }
-                let mut bound: Vec<String> = local
-                    .keys()
-                    .filter(|name| !before.contains(*name))
-                    .cloned()
-                    .collect();
+                let mut bound: Vec<String> =
+                    local.keys().filter(|name| !before.contains(*name)).cloned().collect();
                 bound.sort();
                 for name in &bound {
                     if let Some(capture) = local.get(name) {
@@ -607,11 +576,7 @@ impl Validator<'_> {
                 }
                 captures.insert(
                     name.to_owned(),
-                    Capture {
-                        depth,
-                        groups: stack.clone(),
-                        class: class.to_owned(),
-                    },
+                    Capture { depth, groups: stack.clone(), class: class.to_owned() },
                 );
                 nullable = false;
                 index += 4;
@@ -630,8 +595,8 @@ impl Validator<'_> {
         &mut self,
         nodes: &[Syntax],
         depth: usize,
-        captures: &HashMap<String, Capture>,
-        locals: &HashSet<String>,
+        captures: &OrderedMap<String, Capture>,
+        locals: &OrderedSet<String>,
     ) {
         let mut index = 0;
         while index < nodes.len() {
@@ -668,10 +633,8 @@ impl Validator<'_> {
                         Some(capture) => {
                             if is(nodes.get(index + 2), ".")
                                 && let Some(field) = raw(nodes.get(index + 3))
-                                && let Some(class) = self
-                                    .classes
-                                    .iter()
-                                    .find(|class| class.name == capture.class)
+                                && let Some(class) =
+                                    self.classes.iter().find(|class| class.name == capture.class)
                                 && !class.fields.iter().any(|known| known == field)
                             {
                                 self.out.push(error(
@@ -762,8 +725,8 @@ impl Validator<'_> {
         dollar: &Syntax,
         body: &[Syntax],
         depth: usize,
-        captures: &HashMap<String, Capture>,
-        locals: &HashSet<String>,
+        captures: &OrderedMap<String, Capture>,
+        locals: &OrderedSet<String>,
     ) {
         let mut references = Vec::new();
         let mut field_access = false;
@@ -779,9 +742,7 @@ impl Validator<'_> {
             .collect();
         if drivers.is_empty() {
             // An unknown reference is reported on its own.
-            if references
-                .iter()
-                .any(|name| !locals.contains(name) && !captures.contains_key(name))
+            if references.iter().any(|name| !locals.contains(name) && !captures.contains_key(name))
             {
                 return;
             }
@@ -791,10 +752,8 @@ impl Validator<'_> {
             ));
             return;
         }
-        let groups: HashSet<usize> = drivers
-            .iter()
-            .filter_map(|capture| capture.groups.get(depth - 1).copied())
-            .collect();
+        let groups: OrderedSet<usize> =
+            drivers.iter().filter_map(|capture| capture.groups.get(depth - 1).copied()).collect();
         if groups.len() > 1 {
             self.out.push(error(
                 format!(
@@ -808,11 +767,9 @@ impl Validator<'_> {
 
 /// The global object's names and every name the file's top level declares
 /// or imports.
-fn declared_names(nodes: &[Syntax]) -> HashSet<String> {
-    let mut out: HashSet<String> = ["globalThis", "window", "self", "global"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
+fn declared_names(nodes: &[Syntax]) -> OrderedSet<String> {
+    let mut out: OrderedSet<String> =
+        ["globalThis", "window", "self", "global"].into_iter().map(str::to_owned).collect();
     for (index, node) in nodes.iter().enumerate() {
         if matches!(
             raw(Some(node)),
@@ -904,9 +861,9 @@ pub(crate) fn malformed_syntax_imports(source: &str, nodes: &[Syntax]) -> Vec<Di
 /// is used): the macro and the name.
 pub(crate) fn unknown_parameterizations(
     nodes: &[Syntax],
-    in_scope: &HashSet<String>,
-) -> HashMap<String, String> {
-    let mut out = HashMap::new();
+    in_scope: &OrderedSet<String>,
+) -> OrderedMap<String, String> {
+    let mut out = OrderedMap::default();
     for index in 0..nodes.len() {
         let name = if is(nodes.get(index), "syntax")
             && !is(nodes.get(index + 1), "class")
@@ -923,10 +880,8 @@ pub(crate) fn unknown_parameterizations(
         let Some(name) = name else {
             continue;
         };
-        let Some(body) = nodes[index..]
-            .iter()
-            .take(8)
-            .find_map(|node| group(Some(node), Delimiter::Brace))
+        let Some(body) =
+            nodes[index..].iter().take(8).find_map(|node| group(Some(node), Delimiter::Brace))
         else {
             continue;
         };
@@ -937,7 +892,7 @@ pub(crate) fn unknown_parameterizations(
     out
 }
 
-fn first_unknown_parameter(nodes: &[Syntax], in_scope: &HashSet<String>) -> Option<String> {
+fn first_unknown_parameter(nodes: &[Syntax], in_scope: &OrderedSet<String>) -> Option<String> {
     for (index, node) in nodes.iter().enumerate() {
         let args_at = if is(Some(node), "#") && is(nodes.get(index + 1), "parameterize") {
             Some(index + 2)
@@ -1004,7 +959,7 @@ fn references_in(nodes: &[Syntax], out: &mut Vec<String>, field_access: &mut boo
 }
 
 /// Names a template binds for itself: `#fold`'s `($acc, $item) =>`.
-fn template_locals(nodes: &[Syntax], out: &mut HashSet<String>) {
+fn template_locals(nodes: &[Syntax], out: &mut OrderedSet<String>) {
     for (index, node) in nodes.iter().enumerate() {
         if let Some(children) = group(Some(node), Delimiter::Paren)
             && is_arrow(nodes, index + 1)
@@ -1020,130 +975,5 @@ fn template_locals(nodes: &[Syntax], out: &mut HashSet<String>) {
         if let Syntax::Group { children, .. } = node {
             template_locals(children, out);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sweetener_reader::read_syntax;
-
-    fn codes(code: &str) -> Vec<String> {
-        let read = read_syntax(code);
-        let classes = [KnownClass {
-            name: "Pair".to_owned(),
-            fields: vec!["left".to_owned(), "right".to_owned()],
-        }];
-        validate(&read.children, &classes)
-            .0
-            .into_iter()
-            .map(|diagnostic| diagnostic.message[..7].to_owned())
-            .collect()
-    }
-
-    #[test]
-    fn pattern_and_template_checks() {
-        for (code, expected) in [
-            (
-                "export syntax foo:expr {\n  rule { foo($) } => { 1 }\n}\n",
-                vec!["SWR2002"],
-            ),
-            (
-                "export syntax foo:banana {\n  rule { foo() } => { 1 }\n}\n",
-                vec!["SWR2003"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($x:expr, $x:expr) } => { $x }\n}\n",
-                vec!["SWR2004"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($($($x:expr)?)*) } => { 1 }\n}\n",
-                vec!["SWR2006"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($x:nosuch) } => { $x }\n}\n",
-                vec!["SWR2008"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($x:expr) }\n  refine $y length equal 1;\n  => { $x }\n}\n",
-                vec!["SWR2010"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($x:expr) } => { $y }\n}\n",
-                vec!["SWR2011"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($p:Pair) } => { $p.nope }\n}\n",
-                vec!["SWR2012"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($($x:expr),*) } => { [$x] }\n}\n",
-                vec!["SWR2013"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($x:expr) } => { [$(1),*] }\n}\n",
-                vec!["SWR2014"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo($($x:expr),* ; $($y:expr),*) } => { [$($x + $y),*] }\n}\n",
-                vec!["SWR2015"],
-            ),
-            (
-                "export syntax foo:expr {\n  rule { foo(a $x:expr | b) } => { 1 }\n}\n",
-                vec!["SWR2005"],
-            ),
-            (
-                "export syntax both:expr {\n  rule { both($($a:ident | $a:ident !),*) } => { [$($a),*] }\n}\n",
-                vec![],
-            ),
-            (
-                "export syntax m:expr {\n  rule { m([$($e:tt),*]) } => { #count($e) $(&& $e)* }\n}\n",
-                vec![],
-            ),
-            (
-                "export operator (|>):expr {\n  fixity infix;\n  // note\n  associativity right;\n  precedence 20;\n  rule { $a:expr |> $b:expr } => { $b }\n}\n",
-                vec![],
-            ),
-            (
-                "syntax class loop {\n  fields { v: tt; }\n  rule { $l:loop + $v:tt }\n}\n",
-                vec!["SWR2009"],
-            ),
-            (
-                "export operator (+++):expr {\n  fixity infix;\n  precedence 5;\n  rule { $a:expr +++ $b:expr } => { $a }\n}\n",
-                vec!["SWR4006"],
-            ),
-            (
-                "syntax foo:expr {\n  rule { foo() } => { 1 }\n}\nsyntax foo:expr {\n  rule { foo() } => { 2 }\n}\n",
-                vec!["SWR4010"],
-            ),
-            (
-                "function f() {\n  syntax foo:expr {\n    rule { foo() } => { 1 }\n  }\n}\n",
-                vec!["SWR4016"],
-            ),
-            (
-                "export syntax sum:expr {\n  rule { sum($($x:expr),*) } => { #fold($x, init: { 0 }) { ($acc, $item, $index) => { $acc + $item } } }\n}\n",
-                vec![],
-            ),
-            (
-                "export operator (|>):expr {\n  fixity infix;\n  associativity left;\n  precedence 1;\n  rule { $a:expr |> $f:expr } => { $f($a) }\n}\n",
-                vec![],
-            ),
-        ] {
-            assert_eq!(codes(code), expected, "{code}");
-        }
-    }
-
-    #[test]
-    fn binding_literal_paths_resolve() {
-        assert_eq!(
-            codes(
-                "export syntax foo:expr {\n  literal nosuch.thing as NaN;\n  rule { foo() } => { NaN }\n}\n"
-            ),
-            ["SWR4009"]
-        );
-        assert!(
-            codes("export syntax foo:expr {\n  literal globalThis.NaN as NaN;\n  rule { foo() } => { NaN }\n}\n")
-                .is_empty()
-        );
     }
 }

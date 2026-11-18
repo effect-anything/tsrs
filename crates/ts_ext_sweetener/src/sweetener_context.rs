@@ -11,7 +11,7 @@
 use super::sweetener_reader::{Delimiter, Syntax};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub(crate) struct Contexts {
+pub struct Contexts {
     pub generator: bool,
     pub async_: bool,
 }
@@ -26,31 +26,25 @@ impl Contexts {
     }
 }
 
-const TOP: Contexts = Contexts {
-    generator: false,
-    async_: true,
-};
-const NEITHER: Contexts = Contexts {
-    generator: false,
-    async_: false,
-};
+pub const TOP: Contexts = Contexts { generator: false, async_: true };
+pub const NEITHER: Contexts = Contexts { generator: false, async_: false };
 
 /// A half-open byte range and the contexts inside it. The smallest range
 /// containing an offset is the innermost.
-pub(crate) type Region = (usize, usize, Contexts);
+pub type Region = (usize, usize, Contexts);
 
 /// The module top level: `await` is an expression, `yield` is not.
-pub(crate) const MODULE: Contexts = TOP;
+pub const MODULE: Contexts = TOP;
 
 /// Index a token tree whose top level stands in `base`.
-pub(crate) fn regions(nodes: &[Syntax], base: Contexts) -> Vec<Region> {
+pub fn regions(nodes: &[Syntax], base: Contexts) -> Vec<Region> {
     let mut regions = Vec::new();
     walk(nodes, base, false, &mut regions);
     regions
 }
 
 /// The contexts at `offset`, given the regions of its tree.
-pub(crate) fn lookup(regions: &[Region], offset: usize, base: Contexts) -> Contexts {
+pub fn lookup(regions: &[Region], offset: usize, base: Contexts) -> Contexts {
     regions
         .iter()
         .filter(|(start, end, _)| *start <= offset && offset < *end)
@@ -86,13 +80,7 @@ fn end(node: &Syntax) -> usize {
 }
 
 fn is_paren(node: Option<&Syntax>) -> bool {
-    matches!(
-        node,
-        Some(Syntax::Group {
-            delimiter: Delimiter::Paren,
-            ..
-        })
-    )
+    matches!(node, Some(Syntax::Group { delimiter: Delimiter::Paren, .. }))
 }
 
 /// What a `{` group at `index` opens, read from the tokens before it.
@@ -116,10 +104,7 @@ fn params_before(nodes: &[Syntax], brace: usize) -> Option<usize> {
     while at > 0 {
         at -= 1;
         match &nodes[at] {
-            Syntax::Group {
-                delimiter: Delimiter::Paren,
-                ..
-            } if angle == 0 => return Some(at),
+            Syntax::Group { delimiter: Delimiter::Paren, .. } if angle == 0 => return Some(at),
             Syntax::Token { raw, .. } | Syntax::Operator { raw, .. } => match raw.as_str() {
                 ">" => angle += 1,
                 "<" => angle -= 1,
@@ -168,10 +153,7 @@ fn opens(nodes: &[Syntax], brace: usize, in_class: bool) -> Opens {
             // A preceding block or body ends this header.
             None if matches!(
                 nodes.get(at),
-                Some(Syntax::Group {
-                    delimiter: Delimiter::Brace,
-                    ..
-                })
+                Some(Syntax::Group { delimiter: Delimiter::Brace, .. })
             ) =>
             {
                 break;
@@ -198,10 +180,8 @@ fn opens(nodes: &[Syntax], brace: usize, in_class: bool) -> Opens {
         }
     }
     let has = |word: &str| words.contains(&word);
-    if matches!(
-        words.first().copied(),
-        Some("if" | "for" | "while" | "switch" | "catch" | "with")
-    ) {
+    if matches!(words.first().copied(), Some("if" | "for" | "while" | "switch" | "catch" | "with"))
+    {
         return Opens::Inherit;
     }
     let generator = has("*");
@@ -257,16 +237,10 @@ fn walk(nodes: &[Syntax], here: Contexts, class_body: bool, regions: &mut Vec<Re
         if raw(Some(node)) == Some("=>")
             && !matches!(
                 nodes.get(index + 1),
-                Some(Syntax::Group {
-                    delimiter: Delimiter::Brace,
-                    ..
-                })
+                Some(Syntax::Group { delimiter: Delimiter::Brace, .. })
             )
         {
-            let contexts = Contexts {
-                generator: false,
-                async_: arrow_is_async(nodes, index),
-            };
+            let contexts = Contexts { generator: false, async_: arrow_is_async(nodes, index) };
             let mut stop = index + 1;
             while stop < nodes.len() && !matches!(raw(nodes.get(stop)), Some("," | ";")) {
                 stop += 1;
@@ -281,13 +255,7 @@ fn walk(nodes: &[Syntax], here: Contexts, class_body: bool, regions: &mut Vec<Re
             index = stop;
             continue;
         }
-        if let Syntax::Group {
-            delimiter,
-            children,
-            span,
-            ..
-        } = node
-        {
+        if let Syntax::Group { delimiter, children, span, .. } = node {
             let range = (span.start as usize, span.end as usize);
             match delimiter {
                 Delimiter::Brace => match opens(nodes, index, class_body) {
@@ -308,10 +276,7 @@ fn walk(nodes: &[Syntax], here: Contexts, class_body: bool, regions: &mut Vec<Re
                 Delimiter::Paren
                     if matches!(
                         nodes.get(index + 1),
-                        Some(Syntax::Group {
-                            delimiter: Delimiter::Brace,
-                            ..
-                        })
+                        Some(Syntax::Group { delimiter: Delimiter::Brace, .. })
                     ) && matches!(opens(nodes, index + 1, class_body), Opens::Function(_)) =>
                 {
                     // Parameter defaults are evaluated as their own function.
@@ -322,55 +287,5 @@ fn walk(nodes: &[Syntax], here: Contexts, class_body: bool, regions: &mut Vec<Re
             }
         }
         index += 1;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sweetener_reader::read_syntax;
-
-    fn at(code: &str, marker: &str) -> Contexts {
-        let regions = regions(&read_syntax(code).children, MODULE);
-        lookup(&regions, code.find(marker).expect("marker"), MODULE)
-    }
-
-    #[test]
-    fn function_headers_decide_yield_and_await() {
-        let code = "function* g() { A; const f = () => B; }\nconst c = C;\nasync function k(x = D) { E }\nclass K { *m() { F } x = G; async n() { H } }\nnamespace N { I }\nasync function* ag() { const q = async () => J; function inner() { K2 } }\nclass Z {}\nfunction* ty(): Generator<A, B, C> { P; }\nasync function* ab() { N; const q = async () => O; }\nconst o = { m() { L } };\nasync function k() { return w(M); }\n";
-        let generator = Contexts {
-            generator: true,
-            async_: false,
-        };
-        let async_only = Contexts {
-            generator: false,
-            async_: true,
-        };
-        for (marker, expected) in [
-            ("A;", generator),
-            ("B;", NEITHER),
-            ("C;", TOP),
-            ("D)", NEITHER),
-            ("E }", async_only),
-            ("F }", generator),
-            ("G;", NEITHER),
-            ("H }", async_only),
-            ("I }", NEITHER),
-            ("J;", async_only),
-            ("K2", NEITHER),
-            ("L }", NEITHER),
-            ("M)", async_only),
-            (
-                "N;",
-                Contexts {
-                    generator: true,
-                    async_: true,
-                },
-            ),
-            ("O;", async_only),
-            ("P;", generator),
-        ] {
-            assert_eq!(at(code, marker), expected, "{marker}");
-        }
     }
 }

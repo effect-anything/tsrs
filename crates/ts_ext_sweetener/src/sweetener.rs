@@ -17,9 +17,7 @@ const EXTENSIONS: &[&str] = &[".sts", ".stsx"];
 /// A query string (`file.sts?x=1`) is stripped before the check.
 #[must_use]
 pub fn matches(filename: &str) -> bool {
-    let path = filename
-        .split_once(['?', '#'])
-        .map_or(filename, |(path, _)| path);
+    let path = filename.split_once(['?', '#']).map_or(filename, |(path, _)| path);
     let ext = path.rsplit_once('.').map_or("", |(_, ext)| ext);
     EXTENSIONS.iter().any(|candidate| candidate[1..] == *ext)
 }

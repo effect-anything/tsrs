@@ -13,7 +13,7 @@ use crate::{Segment, SegmentKind, TokenOrigin};
 
 /// Byte ranges of the tokens of `text`: identifiers and numbers, string
 /// literals, and every other non-space character on its own.
-pub(crate) fn tokens(text: &str) -> Vec<(usize, usize)> {
+pub fn tokens(text: &str) -> Vec<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
     let mut at = 0;
@@ -120,7 +120,7 @@ pub(crate) fn token_origins(code: &str, segments: &[Segment]) -> Vec<TokenOrigin
 /// greedy walk the quadratic DP used: on a tie between deleting an old
 /// token and inserting a new one, delete. Two LCS of equal length therefore
 /// pick the same pairs the table produced, including when a token repeats.
-fn lcs_pairs(
+pub fn lcs_pairs(
     old: &str,
     new: &str,
     old_tokens: &[(usize, usize)],
@@ -234,7 +234,7 @@ fn lcs_pairs(
 /// by the rewrite's own diff (common prefix and suffix, then Myers'
 /// shortest edit script, which is a longest common subsequence), not by
 /// searching the source for a spelling.
-pub(crate) fn carry(
+pub fn carry(
     old: &str,
     new: &str,
     pieces: &[crate::sweetener_expand::Piece],
@@ -340,7 +340,7 @@ fn anchored_pairs(
             c.is_alphanumeric() || c == '_' || c == '$' || c == '"' || c == '\'' || c == '`'
         })
     };
-    let set: std::collections::HashSet<(usize, usize)> = pairs.iter().copied().collect();
+    let set: rustc_hash::FxHashSet<(usize, usize)> = pairs.iter().copied().collect();
     pairs
         .iter()
         .copied()
@@ -366,11 +366,7 @@ pub(crate) fn compose(
             let from = mid.max(a);
             let to = mid_end.min(b);
             if from < to {
-                out.push((
-                    start + (from - mid),
-                    start + (to - mid),
-                    src + u32_of(from - a),
-                ));
+                out.push((start + (from - mid), start + (to - mid), src + u32_of(from - a)));
             }
         }
     }
@@ -393,10 +389,7 @@ pub(crate) fn refine_segments(segments: &[Segment], fine: &[(u32, u32, u32)]) ->
             out.push(segment.clone());
             continue;
         }
-        while fine
-            .get(next)
-            .is_some_and(|piece| piece.0 < segment.virtual_start)
-        {
+        while fine.get(next).is_some_and(|piece| piece.0 < segment.virtual_start) {
             next += 1;
         }
         let mut cursor = segment.virtual_start;
@@ -409,11 +402,7 @@ pub(crate) fn refine_segments(segments: &[Segment], fine: &[(u32, u32, u32)]) ->
                 continue;
             }
             if start > cursor {
-                out.push(Segment {
-                    virtual_start: cursor,
-                    virtual_end: start,
-                    ..segment.clone()
-                });
+                out.push(Segment { virtual_start: cursor, virtual_end: start, ..segment.clone() });
             }
             out.push(Segment {
                 virtual_start: start,
@@ -505,13 +494,7 @@ pub fn retarget_segments(
             let virtual_from = to_i32(ns + (lo - os));
             let virtual_to = to_i32(ns + (hi - os));
             if kind == 0 {
-                out.push((
-                    virtual_from,
-                    virtual_to,
-                    gs + to_i32(lo - vs),
-                    gs + to_i32(hi - vs),
-                    0,
-                ));
+                out.push((virtual_from, virtual_to, gs + to_i32(lo - vs), gs + to_i32(hi - vs), 0));
             } else {
                 out.push((virtual_from, virtual_to, gs, ge, kind));
             }
@@ -537,168 +520,4 @@ pub fn retarget_segments(
         merged.push(piece);
     }
     merged
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{carry, lcs_pairs, retarget_segments, tokens};
-
-    /// The quadratic DP this replaced: common-subsequence lengths filled
-    /// from the end, then a forward walk that deletes an old token whenever
-    /// that score ties an insertion. Tests compare Myers against it.
-    fn dp_pairs(old: &[String], new: &[String]) -> Vec<(usize, usize)> {
-        let (n, m) = (old.len(), new.len());
-        let mut table = vec![0u32; (n + 1) * (m + 1)];
-        for i in (0..n).rev() {
-            for j in (0..m).rev() {
-                table[i * (m + 1) + j] = if old[i] == new[j] {
-                    table[(i + 1) * (m + 1) + j + 1] + 1
-                } else {
-                    table[(i + 1) * (m + 1) + j].max(table[i * (m + 1) + j + 1])
-                };
-            }
-        }
-        let mut pairs = Vec::new();
-        let (mut i, mut j) = (0, 0);
-        while i < n && j < m {
-            if old[i] == new[j] {
-                pairs.push((i, j));
-                i += 1;
-                j += 1;
-            } else if table[(i + 1) * (m + 1) + j] >= table[i * (m + 1) + j + 1] {
-                i += 1;
-            } else {
-                j += 1;
-            }
-        }
-        pairs
-    }
-
-    fn spellings(text: &str) -> Vec<String> {
-        tokens(text)
-            .into_iter()
-            .map(|(a, b)| text[a..b].to_owned())
-            .collect()
-    }
-
-    fn assert_matches_dp(old: &str, new: &str) {
-        let old_tokens = tokens(old);
-        let new_tokens = tokens(new);
-        let pairs = lcs_pairs(old, new, &old_tokens, &new_tokens);
-        let want = dp_pairs(&spellings(old), &spellings(new));
-        assert_eq!(pairs, want, "myers {pairs:?} != dp {want:?}");
-        for &(i, j) in &pairs {
-            let (a0, a1) = old_tokens[i];
-            let (b0, b1) = new_tokens[j];
-            assert_eq!(&old[a0..a1], &new[b0..b1]);
-        }
-        // Strictly increasing on both sides: a real alignment, not a bag.
-        for w in pairs.windows(2) {
-            assert!(w[0].0 < w[1].0 && w[0].1 < w[1].1);
-        }
-    }
-
-    #[test]
-    fn diff_edges_match_the_quadratic_walk() {
-        // Empty on either side, and both empty.
-        assert_matches_dp("", "");
-        assert_matches_dp("", "a b");
-        assert_matches_dp("a b", "");
-        // Identical, including one token and whitespace-only.
-        assert_matches_dp("a b c", "a b c");
-        assert_matches_dp("only", "only");
-        assert_matches_dp("  \n", " \t");
-        // Fully disjoint: no token survives.
-        assert_matches_dp("a b c", "x y z");
-        assert_matches_dp("foo", "bar baz");
-        // A repeated token has more than one LCS. The walk must pick the
-        // same one the table did: delete the old token on a tie.
-        assert_matches_dp("a a", "a");
-        assert_matches_dp("a", "a a");
-        assert_matches_dp("a b a", "a a");
-        assert_matches_dp("a x a y a", "a a a");
-        assert_matches_dp("a b a b a", "b a b");
-        // A change in the middle, with a shared prefix and suffix.
-        assert_matches_dp("a b c d", "a x c d");
-        assert_matches_dp("a b c", "a b c d e");
-        assert_matches_dp("x y a b", "a b");
-    }
-
-    #[test]
-    fn repeated_tokens_keep_the_dp_origin() {
-        // `a` occurs three times. The first and the last are the ones the
-        // DP keeps; the middle `a` is the insertion, so it gets no origin.
-        let kept = carry("a b a", "a a a", &[(0, 5, 10)]);
-        assert_eq!(kept, vec![(0, 1, 10), (4, 5, 14)]);
-    }
-
-    #[test]
-    fn retarget_edges() {
-        // Unchanged text is unchanged segments.
-        let same = [(0, 5, 0, 5, 0)];
-        assert_eq!(retarget_segments("a b c", "a b c", &same), same);
-        // A disjoint rewrite drops the verbatim copy and keeps an atom
-        // over the original range.
-        assert_eq!(
-            retarget_segments("a b", "x y", &[(0, 3, 7, 10, 0)]),
-            vec![(0, 3, 7, 10, 1)]
-        );
-        // Nothing to retarget.
-        assert!(retarget_segments("a", "b", &[]).is_empty());
-        // Empty rewrite.
-        assert!(retarget_segments("a b", "", &[(0, 3, 0, 3, 0)]).is_empty());
-    }
-
-    /// Large inputs. `cargo test -- --ignored` runs it; a normal test run
-    /// only checks that it compiles. A few hundred tokens with an edit in
-    /// every one used to allocate an N*M table; Myers keeps a row per edit
-    /// distance and finishes it in well under a second.
-    #[test]
-    #[ignore = "large-input timing of the Myers token diff"]
-    fn myers_large_input_is_fast() {
-        let n = 600;
-        // One repeated token, so the common prefix and suffix are one each
-        // and the middle is a long run of equal tokens with a few edits.
-        // The edit distance stays small while the sequence does not.
-        let mut old = "a ".repeat(n);
-        for i in (0..n).step_by(n / 20) {
-            let at = i * 2;
-            old.replace_range(at..at + 1, "b");
-        }
-        let mut new_text = "a ".repeat(n);
-        for i in (10..n).step_by(n / 20) {
-            let at = i * 2;
-            new_text.replace_range(at..at + 1, "c");
-        }
-        let start = std::time::Instant::now();
-        let kept = carry(&old, &new_text, &[(0, old.len(), 0)]);
-        let elapsed = start.elapsed();
-        // Adjacent copies of `a` join into one piece, so the kept tokens
-        // come back as a handful of runs rather than one entry each. What
-        // matters is that the runs cover most of the text.
-        let covered: usize = kept.iter().map(|(s, e, _)| e - s).sum();
-        assert!(
-            covered > old.len() / 2,
-            "covered {covered} of {}",
-            old.len()
-        );
-        assert!(
-            elapsed.as_millis() < 1_000,
-            "myers took {elapsed:?} on {n} tokens"
-        );
-    }
-
-    /// A lone `(` the alignment paired between unrelated words is not the
-    /// author's paren; punctuation inside a matching run still is.
-    #[test]
-    fn isolated_punctuation_pairs_keep_no_origin() {
-        let old = "alpha ( beta";
-        let new = "gamma ( delta";
-        let pieces = carry(old, new, &[(0, old.len(), 100)]);
-        assert!(pieces.is_empty(), "{pieces:?}");
-        let old = "f(a, b)";
-        let new = "g(a, b)";
-        let pieces = carry(old, new, &[(0, old.len(), 100)]);
-        assert_eq!(pieces, vec![(1, 7, 101)]);
-    }
 }
