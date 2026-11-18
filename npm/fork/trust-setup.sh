@@ -9,20 +9,20 @@
 #   1. publishes a 0.0.0-placeholder version when the package is not on npm yet: npm can only
 #      trust a workflow for a package that exists. The release workflow refuses 0.0.x tags, so a
 #      release never collides with a placeholder.
-#   2. trusts .github/workflows/release.yml of effect-anything/tsc in the environment `npm` to
+#   2. trusts .github/workflows/fork-release.yml of effect-anything/tsrs in the environment `npm` to
 #      publish it. When the package already trusts something else, it stops and prints the
 #      revoke command (it does not revoke by itself).
 # npm drops a new trust that publishes nothing in 2 days. So run this shortly before the first tag.
-# The first publish binds a trust to the repo's GitHub ID, not only its name. After the repo is
-# recreated, run it with --relink: it revokes every trust of each package first. The 2026-10-07
-# recreation needs no relink: v0.1.0 already published from the new repo.
+# The first publish binds a trust to the repo's GitHub ID, not only its name. After switching forks,
+# run it with --relink: it revokes every trust of each package first.
 #
-# usage: npm/trust-setup.sh [--relink]    needs npm 11.15.0 or later (npm trust)
+# usage: npm/fork/trust-setup.sh [--relink]    needs npm 11.15.0 or later (npm trust)
 set -euo pipefail
-[[ ${1:-} != help ]] || { sed -n '2,18p' "$0" >&2; exit 2; }
+[[ ${1:-} != help ]] || { sed -n '2,20p' "$0" >&2; exit 2; }
 relink=0
 [[ ${1:-} != --relink ]] || relink=1
-repo=effect-anything/tsc
+repo=${NPM_TRUST_REPO:-effect-anything/tsrs}
+workflow=${NPM_TRUST_WORKFLOW:-fork-release.yml}
 packages=(@effect-x/tsc @effect-x/tsc-linux-x64 @effect-x/tsc-linux-arm64 @effect-x/tsc-darwin-arm64
   @effect-x/tsc-darwin-x64 @effect-x/tsc-win32-x64 @effect-x/tsc-win32-arm64)
 
@@ -70,13 +70,13 @@ for name in "${packages[@]}"; do
     const text = require("fs").readFileSync(0, "utf8").trim();
     const trusts = text ? JSON.parse(`[${text.replace(/}\s*{/g, "},{")}]`) : [];
     const ok = trusts.some(t => t.type === "github" && t.repository === process.argv[1] &&
-      t.file === "release.yml" && t.environment === "npm" &&
+      t.file === process.argv[2] && t.environment === "npm" &&
       (t.permissions ?? []).includes("createPackage"));
     console.log(ok ? "ok" : trusts.length ? "other" : "none");
-  ' "$repo")
+  ' "$repo" "$workflow")
   case $state in
     none)
-      npm trust github "$name" --file release.yml --repo "$repo" --env npm --allow-publish --yes
+      npm trust github "$name" --file "$workflow" --repo "$repo" --env npm --allow-publish --yes
       sleep 2 ;;
     other)
       echo "$name trusts another repo, workflow, environment or permission:" >&2

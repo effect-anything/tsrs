@@ -1,0 +1,461 @@
+# Builds, packs, verifies and publishes the `@effect-x/tsc` fork release from `effect-anything/tsrs`
+# without modifying upstream `.github/workflows/release.yml`:
+#   - npm packages: `@effect-x/tsc`, `@effect-x/tsc-linux-x64`, `@effect-x/tsc-linux-arm64`,
+#     `@effect-x/tsc-darwin-arm64`, `@effect-x/tsc-darwin-x64`, `@effect-x/tsc-win32-x64`,
+#     `@effect-x/tsc-win32-arm64`
+#   - standalone per-platform archives (`tsc-<version>-<platform>.tar.gz` / `.zip`) + `SHA256SUMS`
+#
+# Triggered only on `effect-anything/tsrs` (`if: github.repository == 'effect-anything/tsrs'`),
+# mirroring upstream `release.yml` (`if: github.repository == 'oxc-project/tsrs'`).
+#
+# Tag pushes (`v<semver>`) publish to npm when either `NPM_TRUSTED_PUBLISHING=true` (OIDC via
+# `npm/fork/trust-setup.sh` in environment `npm`) or `secrets.NPM_TOKEN` is configured, and create
+# the GitHub release. Pull requests and `workflow_dispatch` build, pack and verify all 6 platforms
+# without publishing.
+
+name: Fork Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/fork-release.yml"
+      - "npm/fork/**"
+      - "scripts/fork/**"
+      - "crates/ts_ext_*/**"
+      - "LICENSE"
+      - "NOTICE"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  version:
+    if: github.repository == 'effect-anything/tsrs'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+      ts_nightly: ${{ steps.v.outputs.ts_nightly }}
+      git_head: ${{ steps.v.outputs.git_head }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - id: v
+        run: |
+          if [[ $GITHUB_REF_TYPE == tag ]]; then
+            v=${GITHUB_REF_NAME#v}
+            [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || {
+              echo "::error::tag $GITHUB_REF_NAME is not v<semver>"
+              exit 1
+            }
+            [[ $v != 0.0.* ]] || {
+              echo "::error::0.0.x versions are reserved for npm placeholders (npm/fork/trust-setup.sh)"
+              exit 1
+            }
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            v=0.0.0-ci.$GITHUB_RUN_NUMBER
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+          ts_nightly=$(node npm/build.mjs --print-typescript-nightly)
+          git_head=$(git rev-parse HEAD)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "ts_nightly=$ts_nightly" >> "$GITHUB_OUTPUT"
+          echo "git_head=$git_head" >> "$GITHUB_OUTPUT"
+          echo "package=$v typescript=$ts_nightly commit=$git_head"
+
+  build:
+    name: build (${{ matrix.platform }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on Ubuntu 22.04 so both `tsrs` and `tsc-ext.node` require at most glibc 2.35.
+          - platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+          - platform: darwin-arm64
+            target: aarch64-apple-darwin
+            runner: macos-latest
+          - platform: darwin-x64
+            target: x86_64-apple-darwin
+            runner: macos-latest
+            rosetta: true
+          - platform: win32-x64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            exe: .exe
+          - platform: win32-arm64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            exe: .exe
+            linker: rust-lld
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    env:
+      TSRS_TS_VERSION: ${{ needs.version.outputs.ts_nightly }}
+    steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift
+          df -h /
+
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: |
+          channel=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -1)
+          [[ -n $channel ]] || { echo "::error::missing channel in rust-toolchain.toml"; exit 1; }
+          rustup toolchain install "$channel" --profile minimal --target ${{ matrix.target }}
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+
+      - name: Rosetta
+        if: matrix.rosetta
+        run: |
+          arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+          arch -x86_64 /usr/bin/true
+
+      - name: Configure rust-lld on win32-arm64
+        if: matrix.linker == 'rust-lld'
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          lld="$(cygpath -u "$(rustc --print sysroot)")/lib/rustlib/$host/bin/rust-lld.exe"
+          [[ -x $lld ]] || { echo "::error::no $lld"; exit 1; }
+          target=${{ matrix.target }}
+          target=${target^^}
+          echo "CARGO_TARGET_${target//-/_}_LINKER=$(cygpath -m "$lld")" | tee -a "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fork-release-${{ matrix.target }}
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Build tsrs (noembed)
+        env:
+          EXE: ${{ matrix.exe }}
+          TARGET: ${{ matrix.target }}
+          GIT_HEAD: ${{ needs.version.outputs.git_head }}
+        run: |
+          cargo build --release --locked -p tsrs_cli --bin tsrs --features noembed --target "$TARGET"
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          cp "target/$TARGET/release/tsrs$EXE" "$out/tsc$EXE"
+          printf '%s\n' "$GIT_HEAD" > "$out/COMMIT"
+
+          # Smoke-check the staged noembed binary with bundled libs next to it.
+          check="$RUNNER_TEMP/check"
+          mkdir -p "$check"
+          cp crates/tsrs_vfs/libs/*.d.ts "$check/"
+          cp "$out/tsc$EXE" "$check/tsc$EXE"
+          "$check/tsc$EXE" --version | tee "$RUNNER_TEMP/version.txt"
+          grep -q "^Version $TSRS_TS_VERSION" "$RUNNER_TEMP/version.txt"
+          printf 'const x: number = "bad";\n' > "$RUNNER_TEMP/bad.ts"
+          bad_path="$RUNNER_TEMP/bad.ts"
+          [[ $RUNNER_OS != Windows ]] || bad_path=$(cygpath -m "$bad_path")
+          set +e
+          "$check/tsc$EXE" --noEmit --ignoreConfig "$bad_path" > "$RUNNER_TEMP/diag.txt"
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/diag.txt"
+          [[ $rc == 2 ]] && grep -q "error TS2322" "$RUNNER_TEMP/diag.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsc-${{ matrix.platform }}
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+
+      - name: Build tsc-ext CLI and N-API addon
+        env:
+          EXE: ${{ matrix.exe }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --release --locked -p ts_ext_syntax --bin tsc-ext --lib --target "$TARGET"
+          ext="$RUNNER_TEMP/ext"
+          mkdir -p "$ext"
+          cp "target/$TARGET/release/tsc-ext$EXE" "$ext/tsc-ext$EXE"
+          case $RUNNER_OS in
+            Linux) lib=libts_ext_syntax.so ;;
+            macOS) lib=libts_ext_syntax.dylib ;;
+            Windows) lib=ts_ext_syntax.dll ;;
+          esac
+          cp "target/$TARGET/release/$lib" "$ext/tsc-ext.node"
+          "$ext/tsc-ext$EXE" help
+          if [[ "${{ matrix.rosetta }}" != "true" ]]; then
+            addon="$ext/tsc-ext.node"
+            [[ $RUNNER_OS != Windows ]] || addon=$(cygpath -m "$addon")
+            node -e 'const m = { exports: {} }; process.dlopen(m, process.argv[1]); if (typeof m.exports.transformNative !== "function") process.exit(1)' "$addon"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsc-ext-${{ matrix.platform }}
+          path: ${{ runner.temp }}/ext
+          if-no-files-found: error
+
+  package:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      sums: ${{ steps.sums.outputs.sha256 }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install SDK build dependencies
+        run: pnpm install --frozen-lockfile --filter tsrs-npm-tooling
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tsc-*
+          path: ${{ runner.temp }}/bins
+
+      - name: Pack @effect-x/tsc and platform packages
+        run: |
+          bins="$RUNNER_TEMP/bins"
+          chmod +x "$bins"/tsc-*/tsc "$bins"/tsc-*/tsc.exe "$bins"/tsc-ext-*/tsc-ext "$bins"/tsc-ext-*/tsc-ext.exe
+          ext=()
+          for platform in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64 win32-arm64; do
+            ext+=(--ext "$platform=$bins/tsc-ext-$platform")
+          done
+          scripts/fork/npm-pack.sh --name @effect-x/tsc --package-version "$VERSION" \
+            --also "linux-arm64=$bins/tsc-linux-arm64/tsc" \
+            --also "darwin-arm64=$bins/tsc-darwin-arm64/tsc" \
+            --also "darwin-x64=$bins/tsc-darwin-x64/tsc" \
+            --also "win32-x64=$bins/tsc-win32-x64/tsc.exe" \
+            --also "win32-arm64=$bins/tsc-win32-arm64/tsc.exe" \
+            "${ext[@]}" "$RUNNER_TEMP/pkg" "$bins/tsc-linux-x64/tsc"
+
+      - name: Build standalone archives and SHA256SUMS
+        id: sums
+        run: |
+          pkg="$RUNNER_TEMP/pkg"
+          dist="$RUNNER_TEMP/dist"
+          mkdir -p "$dist"
+          for platform in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64 win32-arm64; do
+            name="tsc-$VERSION-$platform"
+            mkdir -p "$RUNNER_TEMP/archive/$name"
+            cp -r "$pkg/tsc-$platform/lib/." "$pkg/tsc-$platform/LICENSE" "$pkg/tsc-$platform/NOTICE" "$RUNNER_TEMP/archive/$name/"
+            if [[ $platform == win32-* ]]; then
+              (cd "$RUNNER_TEMP/archive" && python3 -m zipfile -c "$dist/$name.zip" "$name")
+            else
+              tar -C "$RUNNER_TEMP/archive" -czf "$dist/$name.tar.gz" "$name"
+            fi
+          done
+          cp "$pkg"/*.tgz "$dist/"
+          (cd "$dist" && sha256sum -- *.tgz *.tar.gz *.zip > SHA256SUMS)
+          cat "$dist/SHA256SUMS"
+          echo "sha256=$(sha256sum "$dist/SHA256SUMS" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: ${{ runner.temp }}/dist
+          if-no-files-found: error
+
+  verify:
+    name: verify (${{ matrix.platform }})
+    needs: [version, package]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-latest
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin-arm64
+            runner: macos-latest
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: win32-x64
+            runner: windows-latest
+          - platform: win32-arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/fork
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: ${{ runner.temp }}/dist
+
+      - name: Verify SHA256SUMS
+        if: runner.os == 'Linux'
+        env:
+          SUMS_SHA256: ${{ needs.package.outputs.sums }}
+        run: |
+          cd "$RUNNER_TEMP/dist"
+          echo "$SUMS_SHA256  SHA256SUMS" | sha256sum --check --strict -
+          sha256sum --check --strict SHA256SUMS
+
+      - name: End-to-end tarball verification (scripts/fork/npm-test.sh)
+        run: |
+          node_platform=$(node -p 'process.platform + "-" + process.arch')
+          echo "node $node_platform"
+          [[ $node_platform == "${{ matrix.platform }}" ]]
+          scripts/fork/npm-test.sh --name @effect-x/tsc --package-version "$VERSION" "$RUNNER_TEMP/dist"
+
+      - name: Standalone archive check
+        if: runner.os != 'Windows'
+        run: |
+          tar -xzf "$RUNNER_TEMP/dist/tsc-$VERSION-${{ matrix.platform }}.tar.gz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/tsc-$VERSION-${{ matrix.platform }}/tsc" --version
+
+      - name: Standalone archive check (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "tsc-$env:VERSION-${{ matrix.platform }}"
+          Expand-Archive "$env:RUNNER_TEMP\dist\$name.zip" $env:RUNNER_TEMP
+          & "$env:RUNNER_TEMP\$name\tsc.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  release:
+    if: needs.version.outputs.release == 'true'
+    needs: [version, verify, package]
+    runs-on: ubuntu-latest
+    environment: npm
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      NPM_TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING }}
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish gate
+        id: gate
+        run: |
+          if [[ -n $NPM_TOKEN || $NPM_TRUSTED_PUBLISHING == true ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::npm publish skipped: neither NPM_TOKEN nor NPM_TRUSTED_PUBLISHING=true is set. Built artifacts remain attached to the workflow run and GitHub release."
+          fi
+
+      - if: steps.gate.outputs.publish == 'true'
+        run: npm install -g npm@11 && npm --version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist
+
+      - name: Verify release artifact integrity
+        env:
+          SUMS_SHA256: ${{ needs.package.outputs.sums }}
+        run: |
+          cd dist
+          echo "$SUMS_SHA256  SHA256SUMS" | sha256sum --check --strict -
+          sha256sum --check --strict SHA256SUMS
+          diff <(find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort) \
+            <({ sed -E 's/^[0-9a-f]{64} [ *]//' SHA256SUMS; echo SHA256SUMS; } | sort) || {
+            echo "::error::dist must contain only SHA256SUMS and the files listed in it"
+            exit 1
+          }
+
+      - name: Publish to npm
+        if: steps.gate.outputs.publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          tag=latest
+          [[ $VERSION != *-* ]] || tag=next
+          echo "dist-tag $tag"
+          for pkg in \
+            @effect-x/tsc-linux-x64:effect-x-tsc-linux-x64 \
+            @effect-x/tsc-linux-arm64:effect-x-tsc-linux-arm64 \
+            @effect-x/tsc-darwin-arm64:effect-x-tsc-darwin-arm64 \
+            @effect-x/tsc-darwin-x64:effect-x-tsc-darwin-x64 \
+            @effect-x/tsc-win32-x64:effect-x-tsc-win32-x64 \
+            @effect-x/tsc-win32-arm64:effect-x-tsc-win32-arm64 \
+            @effect-x/tsc:effect-x-tsc; do
+            name=${pkg%%:*}
+            file=./dist/${pkg#*:}-$VERSION.tgz
+            [[ -f $file ]] || { echo "::error::missing package $file"; exit 1; }
+            if npm view "$name@$VERSION" version > /dev/null 2>&1; then
+              echo "$name@$VERSION is already published"
+            else
+              npm publish "$file" --tag "$tag" --access public
+            fi
+          done
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=()
+          install="npm install -D @effect-x/tsc"
+          [[ $VERSION != *-* ]] || { pre=(--prerelease); install="npm install -D @effect-x/tsc@next"; }
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" "${pre[@]}" \
+            --title "@effect-x/tsc $VERSION" --generate-notes \
+            --notes "Install with \`$install\`, or download the standalone archive for your platform."
