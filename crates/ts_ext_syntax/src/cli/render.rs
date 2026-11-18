@@ -52,11 +52,7 @@ pub struct Style {
 
 impl Style {
     fn paint(self, code: &str, text: &str) -> String {
-        if self.on {
-            format!("\x1b[{code}m{text}\x1b[0m")
-        } else {
-            text.to_owned()
-        }
+        if self.on { format!("\x1b[{code}m{text}\x1b[0m") } else { text.to_owned() }
     }
     #[must_use]
     pub fn red(self, text: &str) -> String {
@@ -153,14 +149,7 @@ impl Diag {
             }
             _ => (String::new(), message.to_owned()),
         };
-        Self {
-            severity,
-            code,
-            message,
-            start,
-            end,
-            related,
-        }
+        Self { severity, code, message, start, end, related }
     }
 }
 
@@ -195,11 +184,7 @@ pub fn diagnostics(
         };
         match format {
             Format::Tsc => {
-                let _ = writeln!(
-                    out,
-                    "{path}({line},{col}): {severity}{code}: {}",
-                    diag.message
-                );
+                let _ = writeln!(out, "{path}({line},{col}): {severity}{code}: {}", diag.message);
                 for (message, start, _) in &diag.related {
                     let (line, col) = line_col(source, *start);
                     let _ = writeln!(out, "  {path}({line},{col}): {message}");
@@ -215,20 +200,12 @@ pub fn diagnostics(
                 out.push_str(&frame(source, diag.start, diag.end, style, diag.severity));
                 for (message, start, end) in &diag.related {
                     let (line, col) = line_col(source, *start);
-                    let _ = writeln!(
-                        out,
-                        "  {} {path}:{line}:{col}: {message}",
-                        style.cyan("note:")
-                    );
+                    let _ =
+                        writeln!(out, "  {} {path}:{line}:{col}: {message}", style.cyan("note:"));
                     out.push_str(&frame(source, *start, *end, style, Severity::Warning));
                 }
                 if !diag.code.is_empty() && diag.code.starts_with("SWR") {
-                    let _ = writeln!(
-                        out,
-                        "  {} tsc-ext explain {}",
-                        style.dim("help:"),
-                        diag.code
-                    );
+                    let _ = writeln!(out, "  {} tsc-ext explain {}", style.dim("help:"), diag.code);
                 }
             }
         }
@@ -268,9 +245,9 @@ fn frame(source: &str, start: u32, end: u32, style: Style, severity: Severity) -
 /// A unified diff from `before` to `after`, by lines, 3 lines of context.
 #[must_use]
 pub fn diff(path: &str, before: &str, after: &str, style: Style) -> String {
+    const CONTEXT: usize = 3;
     let old: Vec<&str> = before.lines().collect();
     let new: Vec<&str> = after.lines().collect();
-    const CONTEXT: usize = 3;
     let ops = line_ops(&old, &new);
     let mut out = format!(
         "{}\n{}\n",
@@ -300,14 +277,8 @@ pub fn diff(path: &str, before: &str, after: &str, style: Style) -> String {
         }
         let end = (last_change + CONTEXT + 1).min(ops.len());
         let (old_start, new_start) = positions(&ops, start);
-        let old_len = ops[start..end]
-            .iter()
-            .filter(|op| !matches!(op, Op::Add(_)))
-            .count();
-        let new_len = ops[start..end]
-            .iter()
-            .filter(|op| !matches!(op, Op::Del(_)))
-            .count();
+        let old_len = ops[start..end].iter().filter(|op| !matches!(op, Op::Add(_))).count();
+        let new_len = ops[start..end].iter().filter(|op| !matches!(op, Op::Del(_))).count();
         out.push_str(&style.cyan(&format!(
             "@@ -{},{old_len} +{},{new_len} @@",
             old_start + 1,
@@ -392,40 +363,4 @@ fn line_ops(old: &[&str], new: &[&str]) -> Vec<Op> {
     ops.extend((i..n).map(Op::Del));
     ops.extend((j..m).map(Op::Add));
     ops
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn line_col_counts_characters() {
-        assert_eq!(line_col("ab\ncé d", 7), (2, 4));
-        assert_eq!(line_col("x", 99), (1, 2));
-    }
-
-    #[test]
-    fn diff_marks_changed_lines() {
-        let out = diff("a.sts", "a\nb\nc\n", "a\nB\nc\n", Style { on: false });
-        assert!(out.contains("@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"), "{out}");
-    }
-
-    #[test]
-    fn frame_points_at_the_span() {
-        let diag = Diag::new(Severity::Error, "SWR4001: No rule.", 10, 11, vec![]);
-        assert_eq!(diag.code, "SWR4001");
-        let out = diagnostics(
-            "a.sts",
-            "const a = x;\n",
-            &[diag],
-            Format::Pretty,
-            Style { on: false },
-        );
-        assert!(
-            out.contains(
-                "a.sts:1:11: error SWR4001: No rule.\n  1 | const a = x;\n    |           ^\n"
-            ),
-            "{out}"
-        );
-    }
 }

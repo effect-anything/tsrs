@@ -2,13 +2,6 @@
 //! output positions to the author's positions and text through the
 //! session's spanmap tuples and its v3 source map.
 
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    reason = "test fixtures are a few hundred bytes"
-)]
-
 use ts_ext_syntax::TransformSession;
 
 const SOURCE: &str = "import { helper } from \"./helper.sts\";\nexport syntax pair:expr {\n  rule { pair($a:expr, $b:expr) } => { [$b, $a, $b] }\n}\nexport syntax all:expr {\n  rule { all($($x:expr),*) } => { [$($x + 1),*] }\n}\nconst ünï = \"é\";\nconst a = pair(left, right);\nconst d = all(p, q,\n  r);\nexport const e = helper(a, d, ünï);\n";
@@ -29,11 +22,7 @@ fn decode(mappings: &str) -> Vec<(usize, usize, usize, usize)> {
                 value |= (digit & 31) << shift;
                 shift += 5;
                 if digit & 32 == 0 {
-                    fields.push(if value & 1 == 1 {
-                        -(value >> 1)
-                    } else {
-                        value >> 1
-                    });
+                    fields.push(if value & 1 == 1 { -(value >> 1) } else { value >> 1 });
                     value = 0;
                     shift = 0;
                 }
@@ -49,10 +38,7 @@ fn decode(mappings: &str) -> Vec<(usize, usize, usize, usize)> {
 
 fn line_col16(text: &str, at: usize) -> (usize, usize) {
     let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
-    (
-        text[..at].matches('\n').count(),
-        text[line_start..at].encode_utf16().count(),
-    )
+    (text[..at].matches('\n').count(), text[line_start..at].encode_utf16().count())
 }
 
 fn offset_of(text: &str, line: usize, col16: usize) -> usize {
@@ -97,19 +83,11 @@ fn output_positions_round_trip_to_author_text() {
             if kind == 0 {
                 let (vs, vl, os, ol) = (vs as usize, vl as usize, os as usize, ol as usize);
                 assert_eq!(vl, ol);
-                assert_eq!(
-                    &out.code[vs..vs + vl],
-                    &SOURCE[os..os + ol],
-                    "{}",
-                    out.mappings
-                );
+                assert_eq!(&out.code[vs..vs + vl], &SOURCE[os..os + ol], "{}", out.mappings);
             }
         }
         assert!(out.source_map.starts_with("{\"version\":3,"));
-        assert!(
-            out.source_map
-                .contains("\"sourcesContent\":[\"import { helper }")
-        );
+        assert!(out.source_map.contains("\"sourcesContent\":[\"import { helper }"));
         let mappings = out.source_map.split("\"mappings\":\"").nth(1).unwrap();
         let points = decode(&mappings[..mappings.find('"').unwrap()]);
         let lookup = |needle: &str, nth: usize| -> (usize, String) {
@@ -131,27 +109,15 @@ fn output_positions_round_trip_to_author_text() {
         assert_eq!(lookup("left", 0), (left, "left".into()));
         assert_eq!(lookup("right", nth + 1), (right, "right".into()));
         // A repetition row on a later author line.
-        assert_eq!(
-            lookup("r + 1", 0),
-            (SOURCE.find("  r)").unwrap() + 2, "r".into())
-        );
+        assert_eq!(lookup("r + 1", 0), (SOURCE.find("  r)").unwrap() + 2, "r".into()));
         // Columns past non-ASCII text are UTF-16, and the line after the
         // rewritten import is not shifted by the shorter specifier.
-        assert_eq!(
-            lookup("ünï", 1),
-            (SOURCE.rfind("ünï").unwrap(), "ünï".into())
-        );
-        assert_eq!(
-            lookup("helper(", 0),
-            (SOURCE.find("helper(").unwrap(), "helper".into())
-        );
+        assert_eq!(lookup("ünï", 1), (SOURCE.rfind("ünï").unwrap(), "ünï".into()));
+        assert_eq!(lookup("helper(", 0), (SOURCE.find("helper(").unwrap(), "helper".into()));
         // Template text maps to the invocation that produced it.
         let bracket = out.code[line..].find('[').unwrap() + line;
         let (l, c) = line_col16(&out.code, bracket);
         let point = points.iter().find(|p| p.0 == l && p.1 == c).unwrap();
-        assert_eq!(
-            offset_of(SOURCE, point.2, point.3),
-            SOURCE.find("pair(left").unwrap()
-        );
+        assert_eq!(offset_of(SOURCE, point.2, point.3), SOURCE.find("pair(left").unwrap());
     }
 }

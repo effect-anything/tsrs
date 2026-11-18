@@ -24,14 +24,14 @@ fn ms(d: Duration) -> String {
 
 fn time<T>(runs: usize, mut before: impl FnMut(), mut f: impl FnMut() -> T) -> Duration {
     median(
-        (0..runs)
-            .map(|_| {
-                before();
-                let start = Instant::now();
-                std::hint::black_box(f());
-                start.elapsed()
-            })
-            .collect(),
+        std::iter::repeat_with(|| {
+            before();
+            let start = Instant::now();
+            std::hint::black_box(f());
+            start.elapsed()
+        })
+        .take(runs)
+        .collect(),
     )
 }
 
@@ -50,22 +50,15 @@ fn main() {
         let path = std::fs::canonicalize(file).expect("file");
         let name = path.display().to_string();
         let code = std::fs::read_to_string(&path).expect("read");
-        let run_expand = || {
-            expand(ExpandRequest {
-                filename: &name,
-                code: &code,
-                phase: Phase::Check,
-            })
-        };
+        let run_expand =
+            || expand(ExpandRequest { filename: &name, code: &code, phase: Phase::Check });
         let expand_cold = time(runs, clear_caches, run_expand);
         let expanded = run_expand();
         let segments = time(runs, || {}, || expanded.span_map_segments());
         let segs = expanded.span_map_segments();
         let json = time(runs, || {}, || ts_ext_syntax::session::mappings_json(&segs));
         let regions = time(runs, || {}, || protocol::expansion_regions(&expanded));
-        let mapper_cold = time(runs, clear_caches, || {
-            protocol::transform_file(&name, &code)
-        });
+        let mapper_cold = time(runs, clear_caches, || protocol::transform_file(&name, &code));
         let mapper_cached = time(runs, || {}, || protocol::transform_file(&name, &code));
         let session = TransformSession::new();
         let plugin_cold = time(runs, clear_caches, || session.transform(&name, &code));

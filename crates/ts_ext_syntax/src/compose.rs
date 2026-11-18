@@ -36,13 +36,7 @@ pub fn parse_spans(text: &str) -> Result<Vec<Span>, String> {
             continue;
         }
         let as_usize = |value: i64| usize::try_from(value).unwrap_or(0);
-        spans.push((
-            as_usize(vs),
-            as_usize(vs + vl),
-            as_usize(os),
-            as_usize(os + ol),
-            kind,
-        ));
+        spans.push((as_usize(vs), as_usize(vs + vl), as_usize(os), as_usize(os + ol), kind));
     }
     spans.sort_unstable();
     Ok(spans)
@@ -81,10 +75,7 @@ impl<'a> Lines<'a> {
     /// the line end.
     fn offset(&self, line: usize, column: usize) -> Option<usize> {
         let start = *self.starts.get(line)?;
-        let end = self
-            .starts
-            .get(line + 1)
-            .map_or(self.text.len(), |next| next - 1);
+        let end = self.starts.get(line + 1).map_or(self.text.len(), |next| next - 1);
         let mut units = 0;
         for (at, ch) in self.text[start..end].char_indices() {
             if units >= column {
@@ -112,7 +103,8 @@ impl<'a> Lines<'a> {
 pub(crate) const DIGITS: &[u8] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-fn decode(mappings: &str) -> Result<Vec<Vec<Vec<i64>>>, String> {
+#[doc(hidden)]
+pub fn decode(mappings: &str) -> Result<Vec<Vec<Vec<i64>>>, String> {
     let mut lines = Vec::new();
     for line in mappings.split(';') {
         let mut segments = Vec::new();
@@ -127,11 +119,7 @@ fn decode(mappings: &str) -> Result<Vec<Vec<Vec<i64>>>, String> {
                 let digit = i64::try_from(digit).unwrap_or(0);
                 value += (digit & 31) << shift;
                 if digit & 32 == 0 {
-                    fields.push(if value & 1 == 1 {
-                        -(value >> 1)
-                    } else {
-                        value >> 1
-                    });
+                    fields.push(if value & 1 == 1 { -(value >> 1) } else { value >> 1 });
                     value = 0;
                     shift = 0;
                 } else {
@@ -147,20 +135,14 @@ fn decode(mappings: &str) -> Result<Vec<Vec<Vec<i64>>>, String> {
 
 /// Append `value` as one base64 VLQ field of a v3 source map.
 pub(crate) fn vlq(out: &mut String, value: i64) {
-    let mut rest = if value < 0 {
-        ((-value) << 1) | 1
-    } else {
-        value << 1
-    };
+    let mut rest = if value < 0 { ((-value) << 1) | 1 } else { value << 1 };
     loop {
         let mut digit = rest & 31;
         rest >>= 5;
         if rest > 0 {
             digit |= 32;
         }
-        out.push(char::from(
-            DIGITS[usize::try_from(digit).unwrap_or_default()],
-        ));
+        out.push(char::from(DIGITS[usize::try_from(digit).unwrap_or_default()]));
         if rest == 0 {
             break;
         }
@@ -179,14 +161,14 @@ fn names_virtual(name: &str, host_path: &str, path: &str) -> bool {
         || name == base(path)
 }
 
-/// `later` (a v3 map whose sources include the virtual text `code`) composed
-/// through `spans` onto `source`, the author file at `path`. Sources other
-/// than the virtual file are kept as they are. When `later` has a single
-/// source it is taken to be the virtual file, whatever its name.
+/// Compose `later` (a v3 map over virtual text `code`) onto `source` at `path`.
+///
+/// Composes through `spans`. Sources other than the virtual file are kept as
+/// they are. When `later` has a single source it is taken to be the virtual
+/// file, whatever its name.
 ///
 /// # Errors
 /// When `later` is not a v3 map.
-#[allow(clippy::too_many_lines)] // one decode, map and encode loop
 pub fn compose(
     path: &str,
     host_path: &str,
@@ -195,10 +177,8 @@ pub fn compose(
     spans: &[Span],
     later: &Value,
 ) -> Result<Value, String> {
-    let mappings = later
-        .get("mappings")
-        .and_then(Value::as_str)
-        .ok_or("map has no `mappings` string")?;
+    let mappings =
+        later.get("mappings").and_then(Value::as_str).ok_or("map has no `mappings` string")?;
     let sources: Vec<String> = later
         .get("sources")
         .and_then(Value::as_array)
@@ -210,10 +190,7 @@ pub fn compose(
     let virtual_index: Vec<bool> = if sources.len() == 1 {
         vec![true]
     } else {
-        sources
-            .iter()
-            .map(|name| names_virtual(name, host_path, path))
-            .collect()
+        sources.iter().map(|name| names_virtual(name, host_path, path)).collect()
     };
     // Output sources: the author file first, then the others in order.
     let mut out_sources = vec![Value::String(path.to_owned())];
@@ -225,12 +202,8 @@ pub fn compose(
         } else {
             remap.push(out_sources.len());
             out_sources.push(Value::String(name.clone()));
-            out_contents.push(
-                contents
-                    .and_then(|items| items.get(index))
-                    .cloned()
-                    .unwrap_or(Value::Null),
-            );
+            out_contents
+                .push(contents.and_then(|items| items.get(index)).cloned().unwrap_or(Value::Null));
         }
     }
     let virtual_lines = Lines::new(code);
@@ -277,12 +250,8 @@ pub fn compose(
                         ));
                     }
                 } else if let Some(&mapped) = remap.get(index) {
-                    target = Some((
-                        i64::try_from(mapped).unwrap_or(0),
-                        in_line,
-                        in_col,
-                        name_field,
-                    ));
+                    target =
+                        Some((i64::try_from(mapped).unwrap_or(0), in_line, in_col, name_field));
                 }
             }
             if !first {
@@ -316,28 +285,4 @@ pub fn compose(
         map["file"] = file.clone();
     }
     Ok(map)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{compose, decode, parse_spans};
-    use serde_json::json;
-
-    #[test]
-    fn verbatim_positions_map_exactly_and_introduced_text_is_unmapped() {
-        // virtual "let a = 1;\nX;\nlet b = 2;" from source "let a = 1;\nlet b = 2;"
-        let source = "let a = 1;\nlet b = 2;";
-        let code = "let a = 1;\nX;\nlet b = 2;";
-        let spans = parse_spans("[[0,11,0,11,0],[14,10,11,10,0]]").unwrap();
-        // identity map of `code`: one segment per line start and at col 4.
-        let later = json!({"version":3,"sources":["a.ts"],"names":[],
-            "mappings":"AAAA,IAAI;AACJ;AACA,IAAI"});
-        let map = compose("a.sts", "a.ts", source, code, &spans, &later).unwrap();
-        assert_eq!(map["sources"], json!(["a.sts"]));
-        let lines = decode(map["mappings"].as_str().unwrap()).unwrap();
-        // line 0: (0 -> 0:0), (4 -> 0:4); line 1: unmapped; line 2: -> 1:0, 1:4
-        assert_eq!(lines[0], vec![vec![0, 0, 0, 0], vec![4, 0, 0, 4]]);
-        assert_eq!(lines[1], vec![vec![0]]);
-        assert_eq!(lines[2], vec![vec![0, 0, 1, -4], vec![4, 0, 0, 4]]);
-    }
 }

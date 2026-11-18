@@ -75,9 +75,7 @@ pub fn settings(parsed: &Parsed) -> Result<Settings, String> {
         Some("typegpu") => Some(Pass::Typegpu),
         Some("tsover") => Some(Pass::Tsover),
         Some(other) => {
-            return Err(format!(
-                "--only takes sweetener, typegpu or tsover, not {other}"
-            ));
+            return Err(format!("--only takes sweetener, typegpu or tsover, not {other}"));
         }
     };
     if stage == Stage::Tsc && matches!(only, Some(Pass::Typegpu | Pass::Tsover)) {
@@ -159,11 +157,7 @@ pub fn expand(parsed: &Parsed) -> u8 {
             continue;
         }
         match std::fs::read_to_string(file) {
-            Ok(text) => inputs.push(Input {
-                shown: file.clone(),
-                path: PathBuf::from(file),
-                text,
-            }),
+            Ok(text) => inputs.push(Input { shown: file.clone(), path: PathBuf::from(file), text }),
             Err(error) => {
                 eprintln!("{}: cannot read {file}: {error}", err.red("error"));
                 exit = EXIT_CONFIG;
@@ -199,10 +193,7 @@ pub fn eval(parsed: &Parsed) -> u8 {
         );
     }
     if parsed.positionals.len() > 1 {
-        return super::usage_error(
-            "eval",
-            "pass the code as one argument (quote it), or on stdin",
-        );
+        return super::usage_error("eval", "pass the code as one argument (quote it), or on stdin");
     }
     let text = match parsed.positionals.first().map(String::as_str) {
         Some("-") | None => {
@@ -249,23 +240,13 @@ fn run(settings: &Settings, inputs: &[Input]) -> u8 {
         };
         let path = input.path.to_string_lossy().replace('\\', "/");
         let output = transform(settings, &path, &input.text, &options);
-        if output
-            .diagnostics
-            .iter()
-            .any(|diag| diag.severity == Severity::Error)
-        {
+        if output.diagnostics.iter().any(|diag| diag.severity == Severity::Error) {
             exit = exit.max(EXIT_ERRORS);
         }
         if settings.json {
             json_items.push(json(settings, input, &output));
         } else {
-            exit = exit.max(print_output(
-                settings,
-                input,
-                &output,
-                inputs.len() > 1,
-                &mut stdout,
-            ));
+            exit = exit.max(print_output(settings, input, &output, inputs.len() > 1, &mut stdout));
         }
     }
     if settings.json {
@@ -278,11 +259,7 @@ fn run(settings: &Settings, inputs: &[Input]) -> u8 {
         stdout.push('\n');
     }
     let mut handle = std::io::stdout().lock();
-    if handle
-        .write_all(stdout.as_bytes())
-        .and_then(|()| handle.flush())
-        .is_err()
-    {
+    if handle.write_all(stdout.as_bytes()).and_then(|()| handle.flush()).is_err() {
         return exit.max(EXIT_CONFIG);
     }
     exit
@@ -315,39 +292,18 @@ fn print_output(
     if settings.trace {
         eprint!(
             "{}",
-            trace_text(
-                &input.shown,
-                &input.text,
-                &output.trace,
-                settings.stage,
-                err_style
-            )
+            trace_text(&input.shown, &input.text, &output.trace, settings.stage, err_style)
         );
     }
     eprint!(
         "{}",
-        render::diagnostics(
-            &shown,
-            source,
-            &output.diagnostics,
-            settings.format,
-            err_style
-        )
+        render::diagnostics(&shown, source, &output.diagnostics, settings.format, err_style)
     );
     if several {
-        let _ = writeln!(
-            stdout,
-            "{}",
-            out_style.dim(&format!("// ==> {} <==", input.shown))
-        );
+        let _ = writeln!(stdout, "{}", out_style.dim(&format!("// ==> {} <==", input.shown)));
     }
     if settings.diff {
-        stdout.push_str(&render::diff(
-            &input.shown,
-            &output.before,
-            &output.code,
-            out_style,
-        ));
+        stdout.push_str(&render::diff(&input.shown, &output.before, &output.code, out_style));
         return EXIT_OK;
     }
     stdout.push_str(&output.code);
@@ -408,12 +364,8 @@ fn transform(settings: &Settings, path: &str, text: &str, options: &Options) -> 
     let trace = if !settings.trace {
         Vec::new()
     } else if sweetener_file {
-        ts_ext_sweetener::expand_traced(crate::ExpandRequest {
-            filename: path,
-            code: text,
-            phase,
-        })
-        .1
+        ts_ext_sweetener::expand_traced(crate::ExpandRequest { filename: path, code: text, phase })
+            .1
     } else {
         notes.push(
             "--trace shows Sweetener macro expansion; this is not a .sts/.stsx file".to_owned(),
@@ -444,13 +396,7 @@ fn transform(settings: &Settings, path: &str, text: &str, options: &Options) -> 
                     .diagnostics
                     .iter()
                     .map(|item| {
-                        diag(
-                            item.severity,
-                            &item.message,
-                            item.start,
-                            item.end,
-                            &item.related,
-                        )
+                        diag(item.severity, &item.message, item.start, item.end, &item.related)
                     })
                     .collect(),
                 code: built.code,
@@ -470,24 +416,12 @@ fn transform(settings: &Settings, path: &str, text: &str, options: &Options) -> 
 
 /// Sweetener alone: the code, its v3 map and its diagnostics.
 fn sweetener(path: &str, text: &str, phase: crate::Phase) -> (String, String, Vec<Diag>) {
-    let expanded = crate::expand(crate::ExpandRequest {
-        filename: path,
-        code: text,
-        phase,
-    });
+    let expanded = crate::expand(crate::ExpandRequest { filename: path, code: text, phase });
     let map = crate::v3_source_map(path, text, &expanded.code, &expanded.span_map_segments());
     let diagnostics = expanded
         .diagnostics
         .iter()
-        .map(|item| {
-            diag(
-                item.severity,
-                &item.message,
-                item.start,
-                item.end,
-                &item.related,
-            )
-        })
+        .map(|item| diag(item.severity, &item.message, item.start, item.end, &item.related))
         .collect();
     (expanded.code, strip_segments(&map), diagnostics)
 }
@@ -506,15 +440,9 @@ fn one_pass(pass: Pass, path: &str, text: &str, sweetener_file: bool, options: &
     };
     let code = match pass {
         Pass::Tsover => {
-            if let Some(rewrite) = ts_goport::ext::tsover::rewrite_text(path, &input) {
+            if let Some(rewrite) = ts_ext_transform::tsover::rewrite_text(path, &input) {
                 diagnostics.extend(rewrite.diagnostics.iter().map(|item| {
-                    Diag::new(
-                        Severity::Error,
-                        &item.message,
-                        item.start,
-                        item.end,
-                        Vec::new(),
-                    )
+                    Diag::new(Severity::Error, &item.message, item.start, item.end, Vec::new())
                 }));
                 rewrite.code
             } else {
@@ -523,16 +451,12 @@ fn one_pass(pass: Pass, path: &str, text: &str, sweetener_file: bool, options: &
             }
         }
         Pass::Typegpu => {
-            let (code, refusals) = ts_goport::ext::typegpu::embed_metadata_reports(
+            let (code, refusals) = ts_ext_transform::typegpu::embed_metadata_reports(
                 path,
                 &input,
                 options.typegpu.auto_naming(),
             );
-            notes.extend(
-                refusals
-                    .into_iter()
-                    .map(|refusal| format!("typegpu: {refusal}")),
-            );
+            notes.extend(refusals.into_iter().map(|refusal| format!("typegpu: {refusal}")));
             code
         }
         Pass::Sweetener => unreachable!("--only sweetener is the Sweetener stage"),
@@ -586,10 +510,8 @@ fn strip_segments(map: &str) -> String {
 fn base64(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let n = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |n, (i, &b)| n | (u32::from(b) << (16 - 8 * i)));
+        let n =
+            chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (u32::from(b) << (16 - 8 * i)));
         for i in 0..4 {
             if i <= chunk.len() {
                 let digit = usize::try_from((n >> (18 - 6 * i)) & 63).unwrap_or_default();
@@ -643,11 +565,7 @@ fn json(settings: &Settings, input: &Input, output: &Output) -> serde_json::Valu
     }
     if settings.trace {
         value["trace"] = serde_json::Value::Array(
-            output
-                .trace
-                .iter()
-                .map(|step| trace_json(&input.text, step))
-                .collect(),
+            output.trace.iter().map(|step| trace_json(&input.text, step)).collect(),
         );
     }
     value
@@ -655,11 +573,7 @@ fn json(settings: &Settings, input: &Input, output: &Output) -> serde_json::Valu
 
 /// A position in the file at depth 0; inside an expansion, only the offset.
 fn located(source: &str, depth: u32, at: u32) -> serde_json::Value {
-    if depth == 0 {
-        position(source, at)
-    } else {
-        serde_json::json!({ "offset": at })
-    }
+    if depth == 0 { position(source, at) } else { serde_json::json!({ "offset": at }) }
 }
 
 fn trace_json(source: &str, step: &crate::TraceStep) -> serde_json::Value {
@@ -691,18 +605,13 @@ fn trace_json(source: &str, step: &crate::TraceStep) -> serde_json::Value {
                 "input": input, "result": result,
             })
         }
-        crate::TraceStep::Expand {
-            macro_name,
-            depth,
-            start,
-            original,
-            replacement,
-            ..
-        } => serde_json::json!({
-            "step": "expand", "macro": macro_name, "depth": depth,
-            "at": located(source, *depth, *start),
-            "original": original, "replacement": replacement,
-        }),
+        crate::TraceStep::Expand { macro_name, depth, start, original, replacement, .. } => {
+            serde_json::json!({
+                "step": "expand", "macro": macro_name, "depth": depth,
+                "at": located(source, *depth, *start),
+                "original": original, "replacement": replacement,
+            })
+        }
     }
 }
 
@@ -714,10 +623,7 @@ fn trace_text(
     stage: Stage,
     style: Style,
 ) -> String {
-    let mut out = format!(
-        "{}\n",
-        style.bold(&format!("trace: {path} (stage {})", stage.as_str()))
-    );
+    let mut out = format!("{}\n", style.bold(&format!("trace: {path} (stage {})", stage.as_str())));
     if steps.is_empty() {
         out.push_str("  no macro use was matched in this file\n");
         return out;
@@ -757,12 +663,7 @@ fn trace_text(
                 trace_attempt(&mut out, source, *depth, &label, result, style);
             }
             crate::TraceStep::Expand {
-                macro_name,
-                depth,
-                start,
-                original,
-                replacement,
-                ..
+                macro_name, depth, start, original, replacement, ..
             } => {
                 let place = place(source, *depth, *start);
                 let _ = writeln!(
@@ -809,10 +710,7 @@ fn trace_attempt(
             } else {
                 format!("`{near}`")
             };
-            let expected = expected
-                .as_ref()
-                .map(|text| format!(", expected {text}"))
-                .unwrap_or_default();
+            let expected = expected.as_ref().map_or_default(|text| format!(", expected {text}"));
             let _ = writeln!(
                 out,
                 "{INDENT}{} {label} stopped at {} {near}{expected}",

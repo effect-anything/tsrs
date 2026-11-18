@@ -1177,6 +1177,7 @@ dependencies = [
  "ts_ext_transform",
  "ts_ext_typegpu",
  "tsrs_api",
+ "tsrs_compiler",
  "tsrs_contentmapper",
  "tsrs_core",
  "tsrs_diagnostics",
@@ -1195,7 +1196,6 @@ dependencies = [
 name = "ts_ext_transform"
 version = "0.25.0"
 dependencies = [
- "base64",
  "rustc-hash",
  "tsrs_ast",
  "tsrs_binder",
@@ -1217,9 +1217,7 @@ dependencies = [
  "tsrs_ast",
  "tsrs_core",
  "tsrs_parser",
- "tsrs_project",
  "tsrs_spanmap",
- "tsrs_vfs",
 ]
 
 [[package]]
@@ -1244,6 +1242,7 @@ dependencies = [
  "tsrs_printer",
  "tsrs_project",
  "tsrs_scanner",
+ "tsrs_spanmap",
  "tsrs_tsoptions",
  "tsrs_vfs",
 ]
@@ -1370,6 +1369,7 @@ version = "7.1.0-beta.tsrs2"
 dependencies = [
  "rayon",
  "rustc-hash",
+ "ts_ext_transform",
  "tsrs_ast",
  "tsrs_binder",
  "tsrs_checker",
@@ -1387,6 +1387,7 @@ dependencies = [
  "tsrs_transformers",
  "tsrs_tsoptions",
  "tsrs_vfs",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1599,6 +1600,7 @@ dependencies = [
  "tsrs_binder",
  "tsrs_checker",
  "tsrs_compiler",
+ "tsrs_contentmapper",
  "tsrs_core",
  "tsrs_diagnostics",
  "tsrs_lsproto",
@@ -1826,6 +1828,7 @@ dependencies = [
  "tsrs_module",
  "tsrs_parser",
  "tsrs_scanner",
+ "tsrs_spanmap",
  "tsrs_vfs",
  "xxhash-rust",
 ]

@@ -56,26 +56,17 @@ fn fixtures_match_their_snapshots() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| {
-            matches!(
-                path.extension().and_then(|ext| ext.to_str()),
-                Some("sts" | "stsx" | "ts")
-            )
+            matches!(path.extension().and_then(|ext| ext.to_str()), Some("sts" | "stsx" | "ts"))
         })
         .collect();
     entries.sort();
-    assert!(!entries.is_empty());
+    assert!(!entries.is_empty(), "expected snapshot fixtures in {}", dir.display());
     for path in entries {
         let text = std::fs::read_to_string(&path).unwrap();
-        let command = text
-            .lines()
-            .next()
-            .and_then(|line| line.strip_prefix("// tsc-ext: "))
-            .unwrap_or_else(|| {
-                panic!(
-                    "{}: first line must be `// tsc-ext: <command>`",
-                    path.display()
-                )
-            });
+        let command =
+            text.lines().next().and_then(|line| line.strip_prefix("// tsc-ext: ")).unwrap_or_else(
+                || panic!("{}: first line must be `// tsc-ext: <command>`", path.display()),
+            );
         let name = path.file_name().unwrap().to_str().unwrap().to_owned();
         let mut args: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
         args.push(name.clone());
@@ -88,16 +79,10 @@ fn fixtures_match_their_snapshots() {
 /// `eval` cases: (snapshot name, arguments, stdin).
 const EVAL: &[(&str, &[&str], &str)] = &[
     ("eval_arg", &["eval", "const a = 1;"], ""),
-    (
-        "eval_stdin_jsx",
-        &["eval", "--jsx", "-"],
-        "const v = <div>{1}</div>;\n",
-    ),
+    ("eval_stdin_jsx", &["eval", "--jsx", "-"], "const v = <div>{1}</div>;\n"),
     (
         "eval_ts_bundle",
-        &[
-            "eval", "--lang", "ts", "--stage", "bundle", "--only", "tsover",
-        ],
+        &["eval", "--lang", "ts", "--stage", "bundle", "--only", "tsover"],
         "const f = (a: number, b: number) => {\n  \"use gpu\";\n  return a * b;\n};\n",
     ),
     ("eval_bad_lang", &["eval", "--lang", "rs", "x"], ""),
@@ -121,40 +106,21 @@ fn eval_matches_its_snapshots() {
 fn every_command_has_help() {
     let dir = std::env::temp_dir();
     for command in ["expand", "eval", "explain", "cheatsheet"] {
-        let out = Command::new(BIN)
-            .args([command, "--help"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        let out = Command::new(BIN).args([command, "--help"]).current_dir(&dir).output().unwrap();
         assert!(out.status.success(), "{command}");
         let text = String::from_utf8(out.stdout).unwrap();
-        assert!(
-            text.contains("EXAMPLES") && text.contains("EXIT CODES"),
-            "{command}:\n{text}"
-        );
+        assert!(text.contains("EXAMPLES") && text.contains("EXIT CODES"), "{command}:\n{text}");
         let again = Command::new(BIN).args(["help", command]).output().unwrap();
         assert_eq!(String::from_utf8(again.stdout).unwrap(), text);
     }
     for unknown in ["frobnicate", "sweetener"] {
-        let out = Command::new(BIN)
-            .args([unknown, "--expand", "a.sts"])
-            .output()
-            .unwrap();
+        let out = Command::new(BIN).args([unknown, "--expand", "a.sts"]).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{unknown}");
         let stderr = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            stderr.starts_with(&format!("tsc-ext: unknown command {unknown}")),
-            "{stderr}"
-        );
+        assert!(stderr.starts_with(&format!("tsc-ext: unknown command {unknown}")), "{stderr}");
     }
-    let out = Command::new(BIN)
-        .args(["explain", "SWR9999"])
-        .output()
-        .unwrap();
+    let out = Command::new(BIN).args(["explain", "SWR9999"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
-    let out = Command::new(BIN)
-        .args(["explain", "4001"])
-        .output()
-        .unwrap();
+    let out = Command::new(BIN).args(["explain", "4001"]).output().unwrap();
     assert!(String::from_utf8(out.stdout).unwrap().contains("SWR4001"));
 }

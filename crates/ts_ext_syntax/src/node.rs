@@ -5,6 +5,8 @@
 //! in JSON, so the wrapper can be renamed or reshaped without touching Rust.
 //! The content mapper is the `tsc-ext` binary and does not go through here.
 
+#![expect(clippy::needless_pass_by_value, reason = "napi passes owned strings")]
+
 use napi_derive::napi;
 use serde_json::{Value, json};
 
@@ -43,23 +45,20 @@ fn options_for(
         Some(file) => config::read_tsconfig_options(file).map_err(error)?,
         None => Options::default(),
     };
-    Ok((
-        base.merged(&explicit),
-        config.map(|file| file.display().to_string()),
-    ))
+    Ok((base.merged(&explicit), config.map(|file| file.display().to_string())))
 }
 
-/// Transform one file. Answers a JSON object: `code`, `hostPath`,
-/// `dependencies`, `diagnostics`, `map` (v3; the identity map when
-/// unchanged), `changed`, `spans` (span-map tuples for `composeNative`; one
-/// verbatim span when unchanged) and `tsconfig`
-/// (the config the options came from, or null).
+/// Transform one file and answer a JSON object.
+///
+/// Returns `code`, `hostPath`, `dependencies`, `diagnostics`, `map` (v3; the
+/// identity map when unchanged), `changed`, `spans` (span-map tuples for
+/// `composeNative`; one verbatim span when unchanged) and `tsconfig` (the
+/// config the options came from, or null).
 ///
 /// # Errors
 /// Invalid explicit options, or a tsconfig that cannot be read or holds
 /// invalid tsc-ext options.
 #[napi(js_name = "transformNative")]
-#[allow(clippy::needless_pass_by_value)] // napi passes owned strings
 pub fn transform_native(
     code: String,
     path: String,
@@ -70,25 +69,18 @@ pub fn transform_native(
     if let Some(message) = crate::unsupported_source(&path) {
         return Err(error(message));
     }
-    let (options, config) = options_for(
-        &path,
-        tsconfig.as_deref(),
-        search_tsconfig,
-        options.as_deref(),
-    )?;
+    let (options, config) =
+        options_for(&path, tsconfig.as_deref(), search_tsconfig, options.as_deref())?;
     let result = TransformSession::from_options(&options).transform(&path, &code);
-    Ok(
-        crate::answer::result_json(&path, &code, &result, config.as_deref())
-            .map_err(error)?
-            .to_string(),
-    )
+    Ok(crate::answer::result_json(&path, &code, &result, config.as_deref())
+        .map_err(error)?
+        .to_string())
 }
 
 // ---- Project -------------------------------------------------------------
 
-type Handles = std::sync::Mutex<
-    std::collections::HashMap<u32, (std::sync::Arc<crate::project::Project>, String)>,
->;
+type Handles =
+    std::sync::Mutex<rustc_hash::FxHashMap<u32, (std::sync::Arc<crate::project::Project>, String)>>;
 
 fn handles() -> &'static Handles {
     static HANDLES: std::sync::OnceLock<Handles> = std::sync::OnceLock::new();
@@ -100,7 +92,7 @@ fn handle(id: u32) -> napi::Result<std::sync::Arc<crate::project::Project>> {
         .lock()
         .map_err(|err| error(err.to_string()))?
         .get(&id)
-        .map(|(project, _)| project.clone())
+        .map(|(project, _)| std::sync::Arc::clone(project))
         .ok_or_else(|| error(format!("Project {id} is disposed")))
 }
 
@@ -110,7 +102,6 @@ fn handle(id: u32) -> napi::Result<std::sync::Arc<crate::project::Project>> {
 /// # Errors
 /// Invalid options, or a tsconfig that cannot be read.
 #[napi(js_name = "projectOpen")]
-#[allow(clippy::needless_pass_by_value)] // napi passes owned strings
 pub fn project_open(tsconfig: String, options: Option<String>) -> napi::Result<String> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static NEXT: AtomicU32 = AtomicU32::new(1);
@@ -128,6 +119,7 @@ pub fn project_open(tsconfig: String, options: Option<String>) -> napi::Result<S
     };
     let project =
         crate::project::open(std::path::Path::new(&tsconfig), explicit, &key).map_err(error)?;
+    // Monotonic handle counter; no cross-thread ordering with non-atomic state is required.
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let answer = json!({
         "id": id,
@@ -136,10 +128,7 @@ pub fn project_open(tsconfig: String, options: Option<String>) -> napi::Result<S
         "extensions": project.extensions(),
         "configErrors": project.config_errors(),
     });
-    handles()
-        .lock()
-        .map_err(|err| error(err.to_string()))?
-        .insert(id, (project, key));
+    handles().lock().map_err(|err| error(err.to_string()))?.insert(id, (project, key));
     Ok(answer.to_string())
 }
 
@@ -148,7 +137,6 @@ pub fn project_open(tsconfig: String, options: Option<String>) -> napi::Result<S
 /// # Errors
 /// A disposed project.
 #[napi(js_name = "projectOwns")]
-#[allow(clippy::needless_pass_by_value)]
 pub fn project_owns(id: u32, path: String) -> napi::Result<bool> {
     Ok(handle(id)?.owns(&path))
 }
@@ -167,13 +155,9 @@ pub fn project_files(id: u32) -> napi::Result<Vec<String>> {
 /// # Errors
 /// A disposed project, a file it does not own, or an unreadable file.
 #[napi(js_name = "projectGetFile")]
-#[allow(clippy::needless_pass_by_value)]
 pub fn project_get_file(id: u32, path: String, text: Option<String>) -> napi::Result<String> {
     let project = handle(id)?;
-    project
-        .get_file(&path, text)
-        .map(|json| json.as_ref().clone())
-        .map_err(error)
+    project.get_file(&path, text).map(|json| json.as_ref().to_owned()).map_err(error)
 }
 
 /// [`project_get_file`] on a worker thread.
@@ -190,7 +174,7 @@ impl napi::Task for GetFileTask {
     fn compute(&mut self) -> napi::Result<String> {
         self.project
             .get_file(&self.path, self.text.take())
-            .map(|json| json.as_ref().clone())
+            .map(|json| json.as_ref().to_owned())
             .map_err(error)
     }
 
@@ -209,11 +193,7 @@ pub fn project_get_file_async(
     path: String,
     text: Option<String>,
 ) -> napi::Result<napi::bindgen_prelude::AsyncTask<GetFileTask>> {
-    Ok(napi::bindgen_prelude::AsyncTask::new(GetFileTask {
-        project: handle(id)?,
-        path,
-        text,
-    }))
+    Ok(napi::bindgen_prelude::AsyncTask::new(GetFileTask { project: handle(id)?, path, text }))
 }
 
 /// `path` changed: the owned files to load again.
@@ -221,7 +201,6 @@ pub fn project_get_file_async(
 /// # Errors
 /// A disposed project, or a tsconfig that can no longer be read.
 #[napi(js_name = "projectInvalidate")]
-#[allow(clippy::needless_pass_by_value)]
 pub fn project_invalidate(id: u32, path: String) -> napi::Result<Vec<String>> {
     handle(id)?.invalidate(&path).map_err(error)
 }
@@ -232,10 +211,7 @@ pub fn project_invalidate(id: u32, path: String) -> napi::Result<Vec<String>> {
 /// Never; a second dispose is a no-op.
 #[napi(js_name = "projectDispose")]
 pub fn project_dispose(id: u32) -> napi::Result<()> {
-    let removed = handles()
-        .lock()
-        .map_err(|err| error(err.to_string()))?
-        .remove(&id);
+    let removed = handles().lock().map_err(|err| error(err.to_string()))?.remove(&id);
     if let Some((project, key)) = removed {
         crate::project::close(&project, &key);
     }
@@ -248,7 +224,6 @@ pub fn project_dispose(id: u32) -> napi::Result<()> {
 /// # Errors
 /// When `later` or `spans` is not valid.
 #[napi(js_name = "composeNative")]
-#[allow(clippy::needless_pass_by_value)] // napi passes owned strings
 pub fn compose_native(
     path: String,
     host_path: String,

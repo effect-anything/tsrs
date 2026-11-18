@@ -4,11 +4,7 @@
 use ts_ext_syntax::{ExpandRequest, Phase, expand};
 
 fn check(code: &str) -> ts_ext_syntax::Expansion {
-    expand(ExpandRequest {
-        filename: "a.ts",
-        code,
-        phase: Phase::Check,
-    })
+    expand(ExpandRequest { filename: "a.ts", code, phase: Phase::Check })
 }
 
 #[test]

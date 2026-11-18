@@ -17,13 +17,15 @@ pub fn host_path(path: &str, extension: &str) -> String {
 }
 
 /// Line starts of `text`, for 1-based line and UTF-16 column lookups.
-pub(crate) struct Positions<'a> {
+#[doc(hidden)]
+pub struct Positions<'a> {
     text: &'a str,
     starts: Vec<usize>,
 }
 
 impl<'a> Positions<'a> {
-    pub(crate) fn new(text: &'a str) -> Self {
+    #[must_use]
+    pub fn new(text: &'a str) -> Self {
         let mut starts = vec![0];
         starts.extend(text.match_indices('\n').map(|(at, _)| at + 1));
         Self { text, starts }
@@ -38,7 +40,8 @@ impl<'a> Positions<'a> {
     }
 
     /// 1-based line and 1-based UTF-16 column of byte `at`.
-    pub(crate) fn line_column(&self, at: usize) -> (usize, usize) {
+    #[must_use]
+    pub fn line_column(&self, at: usize) -> (usize, usize) {
         let at = self.floor(at);
         let line = self.starts.partition_point(|&start| start <= at) - 1;
         let column = self.text[self.starts[line]..at].encode_utf16().count();
@@ -46,7 +49,8 @@ impl<'a> Positions<'a> {
     }
 
     /// UTF-16 offset of byte `at` (JavaScript string index).
-    fn utf16(&self, at: usize) -> usize {
+    #[must_use]
+    pub fn utf16(&self, at: usize) -> usize {
         self.text[..self.floor(at)].encode_utf16().count()
     }
 }
@@ -112,11 +116,8 @@ pub fn result_json(
     tsconfig: Option<&str>,
 ) -> Result<Value, String> {
     let positions = Positions::new(code);
-    let diagnostics: Vec<Value> = result
-        .diagnostics
-        .iter()
-        .map(|item| diagnostic_json(path, &positions, item))
-        .collect();
+    let diagnostics: Vec<Value> =
+        result.diagnostics.iter().map(|item| diagnostic_json(path, &positions, item)).collect();
     // Unchanged: one verbatim span, so `map` is the identity map and
     // `composeMap` renames the later map's source to `path` like any other.
     let (source_map, spans) = if result.changed {
@@ -143,21 +144,4 @@ pub fn result_json(
         "spans": spans,
         "tsconfig": tsconfig,
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Positions, host_path, split_code};
-
-    #[test]
-    fn codes_paths_and_positions() {
-        assert_eq!(split_code("SWR4025: unread"), (4025, "unread"));
-        assert_eq!(split_code("plain"), (0, "plain"));
-        assert_eq!(host_path("/a/b.stsx", ".tsx"), "/a/b.tsx");
-        assert_eq!(host_path("/a/b.ts", ".ts"), "/a/b.ts");
-        let positions = Positions::new("é\nab😀c");
-        assert_eq!(positions.line_column(3), (2, 1));
-        assert_eq!(positions.line_column(9), (2, 5));
-        assert_eq!(positions.utf16(9), 6);
-    }
 }

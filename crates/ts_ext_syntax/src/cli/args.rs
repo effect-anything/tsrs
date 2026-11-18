@@ -1,7 +1,8 @@
-//! Command-line parsing, hand-rolled as the rest of this workspace does it
-//! (`ts_goport`'s tsc reads its own options; no argument-parsing crate is
-//! a dependency anywhere). Long flags only, plus `-h`: `--flag`,
-//! `--flag value`, `--flag=value`, and `--` to end the flags.
+//! Hand-rolled command-line parsing.
+//!
+//! Matches the rest of this workspace (`tsrs`'s tsc reads its own options;
+//! no argument-parsing crate is a dependency anywhere). Long flags only, plus
+//! `-h`: `--flag`, `--flag value`, `--flag=value`, and `--` to end the flags.
 
 /// Whether a flag takes a value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,10 +81,7 @@ pub fn parse(args: &[String], flags: &[Flag]) -> Result<Parsed, String> {
             None => (body, None),
         };
         let Some(spec) = flags.iter().find(|spec| spec.name == name) else {
-            let known: Vec<String> = flags
-                .iter()
-                .map(|spec| format!("--{}", spec.name))
-                .collect();
+            let known: Vec<String> = flags.iter().map(|spec| format!("--{}", spec.name)).collect();
             return Err(format!(
                 "unknown option --{name}; this command takes {}",
                 known.join(", ")
@@ -108,55 +106,4 @@ pub fn parse(args: &[String], flags: &[Flag]) -> Result<Parsed, String> {
         parsed.flags.push((spec.name, value));
     }
     Ok(parsed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const FLAGS: &[Flag] = &[
-        flag("json", Takes::Nothing),
-        flag("stage", Takes::Value),
-        flag("map", Takes::OptionalValue),
-    ];
-
-    fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|arg| (*arg).to_owned()).collect()
-    }
-
-    #[test]
-    fn forms() {
-        let parsed = parse(
-            &args(&[
-                "a.sts", "--stage", "bundle", "--map", "--json", "-", "--", "--x",
-            ]),
-            FLAGS,
-        )
-        .unwrap();
-        assert_eq!(parsed.value("stage"), Some("bundle"));
-        assert!(parsed.has("map") && parsed.value("map").is_none() && parsed.has("json"));
-        assert_eq!(parsed.positionals, ["a.sts", "-", "--x"]);
-        let parsed = parse(&args(&["--stage=tsc", "--map=out.map"]), FLAGS).unwrap();
-        assert_eq!(
-            (parsed.value("stage"), parsed.value("map")),
-            (Some("tsc"), Some("out.map"))
-        );
-        assert!(
-            parse(&args(&["--nope"]), FLAGS)
-                .unwrap_err()
-                .contains("unknown option --nope")
-        );
-        assert!(
-            parse(&args(&["--stage"]), FLAGS)
-                .unwrap_err()
-                .contains("needs a value")
-        );
-        assert!(
-            parse(&args(&["--json=1"]), FLAGS)
-                .unwrap_err()
-                .contains("takes no value")
-        );
-        assert!(parse(&args(&["-x"]), FLAGS).is_err());
-        assert!(parse(&args(&["-h"]), FLAGS).unwrap().help);
-    }
 }

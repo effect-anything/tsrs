@@ -1,4 +1,4 @@
-//! `tsc --watch` with the real `tsc-ext` mapper: an edit of a `for syntax`
+//! `tsrs --watch` with the real `tsc-ext` mapper: an edit of a `for syntax`
 //! macro module expands and checks again the files that import it.
 //!
 //! Two layouts: the macro module outside the program (`files` names only
@@ -7,27 +7,19 @@
 //! must cover its expansion, not only its text.
 //!
 //! The watch backend is a stub that routes the events the test sends, and
-//! each cycle runs on `do_cycle`. One test: the working directory and the
-//! watch backend are per process / thread.
+//! each cycle runs on `do_cycle`.
 
-use std::cell::RefCell;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, Instant};
 
-use rustc_hash::FxHashMap;
-use ts_goport::emitter::program_emit::{EmitResult, WriteFile};
-use ts_goport::execute::execute_tsc::{TscCompilationHooks, command_line};
-use ts_goport::execute::incremental::program::Program;
-use ts_goport::execute::tsc::compile::{CommandLineTesting, Writer, new_os_system};
-use ts_goport::execute::watcher::set_test_watch_backend;
-use ts_goport::execute::watchmanager::{WatchBackend, WatchDirectoryRequest};
-use ts_goport::frontend::compiler::TraceFn;
-use ts_goport::frontend::tspath;
-use ts_goport::fswatch::{self, Event, EventKind};
-use ts_goport::gostd::{GoError, context};
-use ts_goport::locale::Locale;
+use tsrs_core::tspath;
+use tsrs_execute::execute::command_line_with_testing;
+use tsrs_execute::tsc::{CommandLineTesting, ReadWriteCloser, SyncWriter, System};
+use tsrs_execute::watchmanager::{WatchBackend, WatchDirectoryRequest};
+use tsrs_fswatch::{self as fswatch, Event, EventKind};
+use tsrs_vfs::{FS, bundled, osvfs};
 
 #[derive(Default)]
 struct Backend {
@@ -37,33 +29,16 @@ struct Backend {
 struct Closer;
 
 impl fswatch::Watch for Closer {
-    fn close(&self) -> Result<(), GoError> {
+    fn close(&self) -> Result<(), fswatch::Error> {
         Ok(())
     }
-    fn unexported(&self) {}
 }
 
 impl WatchBackend for Backend {
-    fn watch_directory(
-        &self,
-        dir: &str,
-        callback: fswatch::WatchCallback,
-        recursive: bool,
-        ignore: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
-    ) -> Result<Box<dyn fswatch::Watch>, GoError> {
-        let mut closers = self.watch_directories(vec![WatchDirectoryRequest {
-            dir: dir.to_owned(),
-            callback,
-            recursive,
-            ignore,
-        }])?;
-        Ok(closers.remove(0))
-    }
-
     fn watch_directories(
         &self,
         requests: Vec<WatchDirectoryRequest>,
-    ) -> Result<Vec<Box<dyn fswatch::Watch>>, GoError> {
+    ) -> Result<Vec<Box<dyn fswatch::Watch>>, fswatch::Error> {
         let mut watches = self.watches.lock().unwrap();
         Ok(requests
             .into_iter()
@@ -89,70 +64,102 @@ impl Backend {
             .filter(|(dir, recursive, _)| {
                 parent == *dir || (*recursive && parent.starts_with(&format!("{dir}/")))
             })
-            .map(|(_, _, callback)| callback.clone())
+            .map(|(_, _, callback)| Arc::clone(callback))
             .collect();
         for callback in &targets {
-            callback(
-                vec![Event {
-                    kind: EventKind::Update,
-                    path: path.clone(),
-                }],
-                None,
-            );
+            callback(vec![Event::new(EventKind::UPDATE, path.clone())], None);
         }
         !targets.is_empty()
     }
 }
 
-struct Quiet;
-
-impl CommandLineTesting for Quiet {
-    fn on_emitted_files(
-        &self,
-        _result: &EmitResult,
-        _m_times_cache: Option<&Mutex<FxHashMap<tspath::Path, Option<SystemTime>>>>,
-    ) {
-    }
-    fn on_list_files_start(&self, _w: &Writer) {}
-    fn on_list_files_end(&self, _w: &Writer) {}
-    fn on_statistics_start(&self, _w: &Writer) {}
-    fn on_statistics_end(&self, _w: &Writer) {}
-    fn on_build_status_report_start(&self, _w: &Writer) {}
-    fn on_build_status_report_end(&self, _w: &Writer) {}
-    fn on_watch_status_report_start(&self) {}
-    fn on_watch_status_report_end(&self) {}
-    fn get_trace(&self, _w: Writer, _locale: Locale) -> TraceFn {
-        Rc::new(|_, _| {})
-    }
-    fn on_program(&self, _program: &Program) {}
+struct TestSys {
+    cwd: String,
+    fs: Arc<dyn FS>,
+    default_library_path: String,
+    output: Arc<Mutex<String>>,
+    start: Instant,
 }
 
-struct Hooks;
-
-impl TscCompilationHooks for Hooks {
-    fn write_file(&self) -> Option<WriteFile> {
-        None
+impl System for TestSys {
+    fn fs(&self) -> Arc<dyn FS> {
+        Arc::clone(&self.fs)
     }
-    fn testing(&self) -> Option<Rc<dyn CommandLineTesting>> {
-        Some(Rc::new(Quiet))
+
+    fn default_library_path(&self) -> &str {
+        &self.default_library_path
+    }
+
+    fn get_current_directory(&self) -> &str {
+        &self.cwd
+    }
+
+    fn write(&self, text: &str) {
+        self.output.lock().unwrap().push_str(text);
+    }
+
+    fn flush(&self) {}
+
+    fn write_output_is_tty(&self) -> bool {
+        false
+    }
+
+    fn get_environment_variable(&self, name: &str) -> Option<String> {
+        std::env::var(name).ok()
+    }
+
+    fn spawn(
+        &self,
+        command: &[String],
+        dir: &str,
+        stderr: Option<Box<dyn Write + Send>>,
+    ) -> Result<ReadWriteCloser, String> {
+        tsrs_contentmapper::spawn_process(command, dir, stderr)
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn since_start(&self) -> Duration {
+        self.start.elapsed()
+    }
+}
+
+struct Quiet {
+    backend: Arc<Backend>,
+}
+
+impl CommandLineTesting for Quiet {
+    fn watch_backend(&self) -> Option<Arc<dyn WatchBackend>> {
+        Some(Arc::clone(&self.backend) as Arc<dyn WatchBackend>)
+    }
+
+    fn get_trace(
+        &'static self,
+        _w: SyncWriter,
+        _is_sys_writer: bool,
+    ) -> Box<tsrs_compiler::TraceFn> {
+        Box::new(|_, _| {})
     }
 }
 
 const PAIR: &str = "export syntax twice:expr {\n  rule { twice($x:expr) } => { [$x, $x] }\n}\n";
-const TRIPLE: &str = "export syntax twice:expr {\n  rule { twice($x:expr) } => { [$x, $x, $x] }\n}\n";
+const TRIPLE: &str =
+    "export syntax twice:expr {\n  rule { twice($x:expr) } => { [$x, $x, $x] }\n}\n";
 const APP: &str = "import { twice } from \"./macros/twice.sts\" for syntax;\nexport const pair: [number, number] = twice(1);\n";
 
-fn write(root: &Path, name: &str, text: &str) {
+fn write_file(root: &Path, name: &str, text: &str) {
     let path = root.join(name);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
 }
 
-/// Sets up a project in `root`, runs `tsc --watch`, edits the macro module
+/// Sets up a project in `root`, runs `tsrs --watch`, edits the macro module
 /// and returns the output of the first build and of the cycle after the edit.
 fn run(root: &Path, files: Option<&str>) -> (String, String, String) {
     let files = files.map_or_else(String::new, |files| format!("\"files\": {files},"));
-    write(
+    write_file(
         root,
         "tsconfig.json",
         &format!(
@@ -160,7 +167,7 @@ fn run(root: &Path, files: Option<&str>) -> (String, String, String) {
   "contentMappers": [ {{ "package": "mapper", "extensions": [".sts"] }} ] }}"#
         ),
     );
-    write(
+    write_file(
         root,
         "node_modules/mapper/package.json",
         &format!(
@@ -168,37 +175,38 @@ fn run(root: &Path, files: Option<&str>) -> (String, String, String) {
             env!("CARGO_BIN_EXE_tsc-ext")
         ),
     );
-    write(root, "macros/twice.sts", PAIR);
-    write(root, "app.sts", APP);
-    std::env::set_current_dir(root).unwrap();
+    write_file(root, "macros/twice.sts", PAIR);
+    write_file(root, "app.sts", APP);
 
-    let output: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let take = || String::from_utf8(std::mem::take(&mut *output.borrow_mut())).unwrap();
-    let sys = Rc::new(new_os_system().expect("an OS system").with_writer(output.clone()));
-    let backend = Rc::new(Backend::default());
-    set_test_watch_backend(backend.clone());
-    let (ctx, cancel) = context::with_cancel(&context::background());
+    let output = Arc::new(Mutex::new(String::new()));
+    let take = || std::mem::take(&mut *output.lock().unwrap());
+    let sys: &'static dyn System = Box::leak(Box::new(TestSys {
+        cwd: tspath::normalize_path(&root.to_string_lossy()),
+        fs: Arc::new(bundled::wrap_fs(osvfs::fs())),
+        default_library_path: bundled::default_lib_path(),
+        output: Arc::clone(&output),
+        start: Instant::now(),
+    }));
+    let backend = Arc::new(Backend::default());
+    let testing: &'static dyn CommandLineTesting =
+        Box::leak(Box::new(Quiet { backend: Arc::clone(&backend) }));
     let args: Vec<String> = ["--watch", "--runExternalCode", "--preserveWatchOutput"]
         .iter()
         .map(|arg| (*arg).to_string())
         .collect();
-    let result = command_line(&ctx, sys, &args, &Hooks);
+    let result = command_line_with_testing(sys, args, Some(testing));
     let mut watcher = result.watcher.expect("a watcher");
     let first = take();
 
-    write(root, "macros/twice.sts", TRIPLE);
-    assert!(
-        backend.update(&root.join("macros/twice.sts")),
-        "no watch covers the macro module"
-    );
+    write_file(root, "macros/twice.sts", TRIPLE);
+    assert!(backend.update(&root.join("macros/twice.sts")), "no watch covers the macro module");
     watcher.do_cycle();
     let edited = take();
 
-    write(root, "macros/twice.sts", PAIR);
+    write_file(root, "macros/twice.sts", PAIR);
     backend.update(&root.join("macros/twice.sts"));
     watcher.do_cycle();
     let restored = take();
-    cancel();
     drop(watcher);
     (first, edited, restored)
 }
@@ -212,6 +220,7 @@ fn scratch(name: &str) -> PathBuf {
 
 #[test]
 fn an_edited_macro_module_rechecks_its_importers() {
+    let _guard = crate::E2E_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     for (name, files) in [("outside", Some(r#"["app.sts"]"#)), ("inside", None)] {
         let root = scratch(name);
         let (first, edited, restored) = run(&root, files);
@@ -220,11 +229,7 @@ fn an_edited_macro_module_rechecks_its_importers() {
             edited.contains("app.sts") && edited.contains("error TS2322"),
             "{name}: after the edit, app.sts must fail:\n{edited}"
         );
-        assert!(
-            !restored.contains("error TS"),
-            "{name}: after the revert:\n{restored}"
-        );
-        std::env::set_current_dir(std::env::temp_dir()).unwrap();
+        assert!(!restored.contains("error TS"), "{name}: after the revert:\n{restored}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

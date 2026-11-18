@@ -2,7 +2,7 @@
 
 The published `@effect-x/tsc` npm package has two bins and a Node API:
 
-- `tsc`: the compiler (crates/ts_goport).
+- `tsc`: the compiler (`crates/tsrs_cli`, `tsrs` binary).
 - `tsc-ext`: this crate's binary, `src/bin/tsc_ext.rs`.
 - `import { Transformer, formatDiagnostics } from "@effect-x/tsc/ext"`: this crate's Node addon
   (`src/node.rs`) behind the JavaScript wrapper in `js/`.
@@ -90,14 +90,14 @@ The cheatsheet, the options reference and the diagnostics catalog are built into
 (`ext/docs/{cheatsheet,options,diagnostics}.md`; `--raw` prints the Markdown).
 `ext/docs/diagnostics.md` is generated from `ts_ext_sweetener::catalog`
 (`TSC_EXT_UPDATE=1 cargo test -p ts_ext_sweetener --test catalog`). Command snapshots are in
-`tests/fixtures` (`TSC_EXT_UPDATE=1 cargo test -p ts_ext_syntax --test cli_snapshots`).
+`tests/fixtures` (`TSC_EXT_UPDATE=1 cargo test -p ts_ext_syntax --test integration`).
 
 `tsc` starts the mapper from the package's `typescript.contentMapper.exec` (`./bin/tsc-ext`), run
 in the package directory. When the platform package `@effect-x/tsc-<platform>-<arch>` is
 installed, this port's `tsc` starts its native `lib/tsc-ext` instead, with no Node process. That is
 a host convention, not a manifest field: for a one-entry `exec` of `./bin/<name>`, `tsc` looks for
 `<package>-<platform>-<arch>/lib/<name>` resolved from the mapper package
-(`crates/ts_goport/src/frontend/tsoptions/content_mappers.rs`, `native_exec`). `bin/tsc-ext` is a Node
+(`crates/tsrs_tsoptions/src/native_mapper.rs`, `native_exec`). `bin/tsc-ext` is a Node
 launcher of the same binary, the fallback when the platform package is missing and the command a
 shell runs; here (development) `bin/tsc-ext` is a
 link to `target/debug/tsc-ext` (`ext/examples/link-debug.mjs`). `tsc` runs content mappers only

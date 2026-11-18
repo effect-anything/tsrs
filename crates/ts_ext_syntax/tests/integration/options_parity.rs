@@ -41,11 +41,7 @@ fn cli(file: &Path, stage: &str) -> String {
         .arg(file)
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
 }
 
@@ -85,10 +81,7 @@ fn mapper(dir: &Path, file: &Path, options: &str) -> String {
     let config = serde_json::to_string(&dir.join("tsconfig.json")).unwrap();
     let file = serde_json::to_string(file).unwrap();
     let content = serde_json::to_string(SOURCE).unwrap();
-    send(
-        &mut stdin,
-        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
-    );
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
     receive(&mut stdout);
     send(
         &mut stdin,
@@ -97,20 +90,14 @@ fn mapper(dir: &Path, file: &Path, options: &str) -> String {
         ),
     );
     let opened = receive(&mut stdout);
-    assert!(
-        opened["result"].get("optionDiagnostics").is_none(),
-        "{opened}"
-    );
+    assert!(opened["result"].get("optionDiagnostics").is_none(), "{opened}");
     send(
         &mut stdin,
         &format!(
             r#"{{"jsonrpc":"2.0","id":4,"method":"transform","params":{{"projectHandle":"p","fileName":{file},"content":{content}}}}}"#
         ),
     );
-    let checked = receive(&mut stdout)["result"]["text"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let checked = receive(&mut stdout)["result"]["text"].as_str().unwrap().to_owned();
     drop(stdin);
     child.wait().unwrap();
     checked

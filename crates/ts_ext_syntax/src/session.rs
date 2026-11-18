@@ -24,7 +24,6 @@ pub enum TransformPhase {
 
 /// Reusable plugin transform. It holds no compiler and no tsconfig.
 #[derive(Clone, Debug)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct TransformSession {
     phase: TransformPhase,
     /// Upstream's `autoNamingEnabled`. The plugin defaults it on; the plugin's
@@ -189,11 +188,7 @@ impl TransformSession {
 }
 
 fn sweetener_then_typegpu(session: &TransformSession, path: &str, code: &str) -> Transformed {
-    let expanded = expand(ExpandRequest {
-        filename: path,
-        code,
-        phase: Phase::Build,
-    });
+    let expanded = expand(ExpandRequest { filename: path, code, phase: Phase::Build });
     apply_typegpu(
         session,
         session.phase,
@@ -206,15 +201,7 @@ fn sweetener_then_typegpu(session: &TransformSession, path: &str, code: &str) ->
 }
 
 fn typegpu_only(session: &TransformSession, path: &str, code: &str) -> Transformed {
-    apply_typegpu(
-        session,
-        session.phase,
-        path,
-        code,
-        code,
-        &crate::unchanged(code),
-        false,
-    )
+    apply_typegpu(session, session.phase, path, code, code, &crate::unchanged(code), false)
 }
 
 fn apply_typegpu(
@@ -249,7 +236,8 @@ fn apply_typegpu(
         // The operator rewrite and the wrap insert text, collapse
         // whitespace and hoist marked functions: token alignment carries
         // every kept token, a hoisted one too, so the map stays exact.
-        let segments = ts_goport::ext::align::retarget(code, &gpu.code, &first.span_map_segments());
+        let segments =
+            ts_ext_transform::align::retarget(code, &gpu.code, &first.span_map_segments());
         let segments = crate::retarget_segments(&gpu.code, &output, &segments);
         let mappings = mappings_json(&segments);
         let source_map = v3_source_map(path, source, &output, &segments);
@@ -427,9 +415,7 @@ fn restore_unstripped_literals(source: &str, code: &str) -> String {
             continue;
         }
         let rest = &source[si..];
-        let ext = [".stsx", ".sts"]
-            .into_iter()
-            .find(|ext| rest.starts_with(ext));
+        let ext = [".stsx", ".sts"].into_iter().find(|ext| rest.starts_with(ext));
         let Some(ext) = ext else {
             return code.to_owned();
         };
@@ -441,11 +427,7 @@ fn restore_unstripped_literals(source: &str, code: &str) -> String {
         out.push_str(ext);
         si += ext.len();
     }
-    if si == source_bytes.len() && ci == code_bytes.len() {
-        out
-    } else {
-        code.to_owned()
-    }
+    if si == source_bytes.len() && ci == code_bytes.len() { out } else { code.to_owned() }
 }
 
 fn inside_quote(bytes: &[u8], at: usize) -> bool {
@@ -513,7 +495,7 @@ fn rewrite_from_clauses(code: &str) -> String {
     out
 }
 
-#[allow(clippy::match_same_arms, reason = "one arm per scanner state and byte")]
+#[expect(clippy::match_same_arms, reason = "one arm per scanner state and byte")]
 fn sts_specifier_spans(code: &str) -> Vec<(usize, usize, String)> {
     let bytes = code.as_bytes();
     let mut spans = Vec::new();
@@ -665,7 +647,7 @@ fn scan_template(
 }
 
 /// Tokens inside `${ ... }`, stopped at the `}` that closes this hole.
-#[allow(clippy::match_same_arms, reason = "one arm per scanner state and byte")]
+#[expect(clippy::match_same_arms, reason = "one arm per scanner state and byte")]
 fn scan_nested(
     code: &str,
     bytes: &[u8],
@@ -690,13 +672,7 @@ fn scan_nested(
             continue;
         }
         if ch == b'`' {
-            at = scan_template(
-                code,
-                bytes,
-                at,
-                depth == 1 && expect == Expect::Specifier,
-                spans,
-            );
+            at = scan_template(code, bytes, at, depth == 1 && expect == Expect::Specifier, spans);
             expect = Expect::None;
             continue;
         }
@@ -862,9 +838,7 @@ fn strip_sts_extension(literal: &str) -> Option<String> {
     }
     let body = &literal[1..literal.len() - 1];
     let (path, suffix) = split_specifier_suffix(body);
-    let stripped = path
-        .strip_suffix(".stsx")
-        .or_else(|| path.strip_suffix(".sts"))?;
+    let stripped = path.strip_suffix(".stsx").or_else(|| path.strip_suffix(".sts"))?;
     if stripped.is_empty() || stripped.ends_with('.') {
         return None;
     }
@@ -894,22 +868,22 @@ fn diagnostics_of(expansion: &crate::Expansion) -> Vec<SessionDiagnostic> {
         .collect()
 }
 
-fn compose(
+#[doc(hidden)]
+#[must_use]
+pub fn compose(
     first: &crate::Expansion,
-    second: &ts_goport::ext::tsover::Rewrite,
+    second: &ts_ext_transform::tsover::Rewrite,
 ) -> Vec<(i32, i32, i32, i32, i32)> {
     let mut out = Vec::new();
     for segment in &second.segments {
-        if segment.kind == ts_goport::spanmap::Kind::VERBATIM {
+        if segment.kind == tsrs_spanmap::Kind::VERBATIM {
             split_verbatim(first, segment, &mut out);
-        } else if let Some(mapped) = map_through(
-            first,
-            segment.original_start.cast_unsigned(),
-            segment.original_end.cast_unsigned(),
-        ) {
+        } else if let Some(mapped) =
+            map_through(first, segment.original_start, segment.original_end)
+        {
             out.push((
-                segment.virtual_start,
-                segment.virtual_end,
+                i32::try_from(segment.virtual_start).unwrap_or(0),
+                i32::try_from(segment.virtual_end).unwrap_or(0),
                 i32::try_from(mapped.start).unwrap_or(0),
                 i32::try_from(mapped.end).unwrap_or(0),
                 1,
@@ -921,11 +895,12 @@ fn compose(
 
 fn split_verbatim(
     first: &crate::Expansion,
-    segment: &ts_goport::spanmap::Segment,
+    segment: &tsrs_spanmap::Segment,
     out: &mut Vec<(i32, i32, i32, i32, i32)>,
 ) {
-    let origin = segment.original_start.cast_unsigned();
-    let end = segment.original_end.cast_unsigned();
+    let origin = segment.original_start;
+    let end = segment.original_end;
+    let v_start = i32::try_from(segment.virtual_start).unwrap_or(0);
     let mut cursor = origin;
     for prev in &first.segments {
         if prev.virtual_end <= cursor {
@@ -952,8 +927,8 @@ fn split_verbatim(
             crate::SegmentKind::Atom => (prev.original_start, prev.original_end, 1),
         };
         out.push((
-            segment.virtual_start.wrapping_add(shift),
-            segment.virtual_start.wrapping_add(shift).wrapping_add(len),
+            v_start.wrapping_add(shift),
+            v_start.wrapping_add(shift).wrapping_add(len),
             i32::try_from(original_start).unwrap_or(0),
             i32::try_from(original_end).unwrap_or(0),
             kind,
@@ -965,9 +940,10 @@ fn split_verbatim(
     }
 }
 
-struct MappedRange {
-    start: u32,
-    end: u32,
+#[doc(hidden)]
+pub struct MappedRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 fn author_diagnostics(
@@ -992,7 +968,9 @@ fn author_diagnostics(
 
 /// Map a span of the first expansion's virtual text back to the author.
 /// A macro atom contributes its whole author span. A gap contributes nothing.
-fn map_through(first: &crate::Expansion, start: u32, end: u32) -> Option<MappedRange> {
+#[doc(hidden)]
+#[must_use]
+pub fn map_through(first: &crate::Expansion, start: u32, end: u32) -> Option<MappedRange> {
     if end < start {
         return None;
     }
@@ -1000,15 +978,12 @@ fn map_through(first: &crate::Expansion, start: u32, end: u32) -> Option<MappedR
         let segment = segment_at(first, start)?;
         return Some(match segment.kind {
             crate::SegmentKind::Verbatim => {
-                let at = segment
-                    .original_start
-                    .saturating_add(start - segment.virtual_start);
+                let at = segment.original_start.saturating_add(start - segment.virtual_start);
                 MappedRange { start: at, end: at }
             }
-            crate::SegmentKind::Atom => MappedRange {
-                start: segment.original_start,
-                end: segment.original_end,
-            },
+            crate::SegmentKind::Atom => {
+                MappedRange { start: segment.original_start, end: segment.original_end }
+            }
         });
     }
     let start_at = segment_at(first, start)?;
@@ -1016,17 +991,12 @@ fn map_through(first: &crate::Expansion, start: u32, end: u32) -> Option<MappedR
     if std::ptr::eq(start_at, end_at) {
         return Some(match start_at.kind {
             crate::SegmentKind::Verbatim => MappedRange {
-                start: start_at
-                    .original_start
-                    .saturating_add(start - start_at.virtual_start),
-                end: start_at
-                    .original_start
-                    .saturating_add(end - start_at.virtual_start),
+                start: start_at.original_start.saturating_add(start - start_at.virtual_start),
+                end: start_at.original_start.saturating_add(end - start_at.virtual_start),
             },
-            crate::SegmentKind::Atom => MappedRange {
-                start: start_at.original_start,
-                end: start_at.original_end,
-            },
+            crate::SegmentKind::Atom => {
+                MappedRange { start: start_at.original_start, end: start_at.original_end }
+            }
         });
     }
     // A range across segments is the union of what each covered segment
@@ -1042,32 +1012,22 @@ fn map_through(first: &crate::Expansion, start: u32, end: u32) -> Option<MappedR
         }
         let (s, e) = match segment.kind {
             crate::SegmentKind::Verbatim => (
-                segment
-                    .original_start
-                    .saturating_add(lo - segment.virtual_start),
-                segment
-                    .original_start
-                    .saturating_add(hi - segment.virtual_start),
+                segment.original_start.saturating_add(lo - segment.virtual_start),
+                segment.original_start.saturating_add(hi - segment.virtual_start),
             ),
             crate::SegmentKind::Atom => (segment.original_start, segment.original_end),
         };
         low = low.min(s);
         high = high.max(e);
     }
-    (low <= high).then_some(MappedRange {
-        start: low,
-        end: high,
-    })
+    (low <= high).then_some(MappedRange { start: low, end: high })
 }
 
 fn segment_at(first: &crate::Expansion, pos: u32) -> Option<&crate::Segment> {
     first.segments.iter().find(|segment| {
         pos >= segment.virtual_start && pos < segment.virtual_end
             || (pos == segment.virtual_end
-                && first
-                    .segments
-                    .last()
-                    .is_some_and(|last| pos == last.virtual_end))
+                && first.segments.last().is_some_and(|last| pos == last.virtual_end))
     })
 }
 
@@ -1107,12 +1067,13 @@ pub fn source_map_json(file: &str, mappings: &str) -> String {
     )
 }
 
-/// A Source Map v3 from `output` back to `source`, with real VLQ
-/// `mappings` so any consumer (bundlers, devtools, `source-map`) can read
-/// it. A verbatim range maps every token start, plus every line start
-/// inside it, to its exact original position. An atom maps its start (and
-/// its line starts) to the start of the original range that produced it.
-/// The raw spanmap tuples stay under `segments` for composing tools.
+/// A Source Map v3 from `output` back to `source`, with real VLQ `mappings`.
+///
+/// Any consumer (bundlers, devtools, `source-map`) can read it. A verbatim
+/// range maps every token start, plus every line start inside it, to its
+/// exact original position. An atom maps its start (and its line starts) to
+/// the start of the original range that produced it. The raw spanmap tuples
+/// stay under `segments` for composing tools.
 #[must_use]
 pub fn v3_source_map(
     file: &str,
@@ -1124,19 +1085,15 @@ pub fn v3_source_map(
     let source_lines = line_starts(source);
     let output_lines = line_starts(output);
     let position = |lines: &[usize], offset: usize| -> (usize, usize) {
-        let line = lines
-            .partition_point(|&start| start <= offset)
-            .saturating_sub(1);
+        let line = lines.partition_point(|&start| start <= offset).saturating_sub(1);
         (line, offset - lines[line])
     };
     // (output offset, original offset), sorted by output.
     let mut points: Vec<(usize, usize)> = Vec::new();
     for &(vs, ve, os, _, kind) in segments {
-        let (Ok(vs), Ok(ve), Ok(os)) = (
-            usize::try_from(vs),
-            usize::try_from(ve),
-            usize::try_from(os),
-        ) else {
+        let (Ok(vs), Ok(ve), Ok(os)) =
+            (usize::try_from(vs), usize::try_from(ve), usize::try_from(os))
+        else {
             continue;
         };
         if ve > output.len() || vs >= ve {
@@ -1151,11 +1108,8 @@ pub fn v3_source_map(
             }
             let starts_line = at == 0 || bytes[at - 1] == b'\n';
             let starts_token = at == vs || !(is_word(byte) && is_word(bytes[at - 1]));
-            let point = if kind == 0 {
-                starts_token || starts_line
-            } else {
-                at == vs || starts_line
-            };
+            let point =
+                if kind == 0 { starts_token || starts_line } else { at == vs || starts_line };
             if !point {
                 continue;
             }
@@ -1247,306 +1201,8 @@ pub fn mappings_json(segments: &[(i32, i32, i32, i32, i32)]) -> String {
         if index > 0 {
             out.push(',');
         }
-        let _ = write!(
-            out,
-            "[{v0},{},{o0},{},{kind}]",
-            v1.wrapping_sub(*v0),
-            o1.wrapping_sub(*o0)
-        );
+        let _ = write!(out, "[{v0},{},{o0},{},{kind}]", v1.wrapping_sub(*v0), o1.wrapping_sub(*o0));
     }
     out.push(']');
     out
-}
-
-#[cfg(test)]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    reason = "test fixtures are a few hundred bytes"
-)]
-mod tests {
-    use super::{TransformSession, compose, map_through};
-
-    #[test]
-    fn import_specifiers_keep_the_extension_unless_rewriting() {
-        let code = "import { b } from \"./b.sts\";\nexport syntax twice:expr {\n  rule { twice($x:expr) } => { [$x, $x] }\n}\nexport const a = twice(b);\n";
-        let kept = TransformSession::from_options(&crate::config::Options::default())
-            .transform("/p/a.sts", code);
-        assert!(kept.code.contains("from \"./b.sts\""), "{}", kept.code);
-        assert!(kept.code.contains("[b, b]"), "{}", kept.code);
-        let mut options = crate::config::Options::default();
-        options.sweetener.rewrite_imports = Some(true);
-        let rewritten = TransformSession::from_options(&options).transform("/p/a.sts", code);
-        assert!(
-            rewritten.code.contains("from \"./b\""),
-            "{}",
-            rewritten.code
-        );
-    }
-
-    #[test]
-    fn ranges_across_reordered_segments_cover_every_operand() {
-        let verbatim = |vs, ve, os| crate::Segment {
-            virtual_start: vs,
-            virtual_end: ve,
-            original_start: os,
-            original_end: os + (ve - vs),
-            kind: crate::SegmentKind::Verbatim,
-        };
-        // `[b, a]` printed from `pair(a, b)` (a at 5, b at 8).
-        let first = crate::Expansion {
-            segments: vec![verbatim(1, 2, 8), verbatim(4, 5, 5)],
-            ..Default::default()
-        };
-        let mapped = map_through(&first, 1, 5).unwrap();
-        assert_eq!((mapped.start, mapped.end), (5, 9));
-    }
-
-    #[test]
-    fn ordinary_file_runs_typegpu_only() {
-        let code = "function f(a, b) { \"use gpu\"; return a + b }";
-        let out = TransformSession::new().transform("a.ts", code);
-        assert!(!out.changed);
-        assert_eq!(out.code, code);
-        assert!(!out.code.contains("__tsover_add"), "{}", out.code);
-    }
-
-    #[test]
-    fn check_keeps_the_operator_and_build_emits_the_call() {
-        let code = "function add(a, b) { \"use gpu\"; return a + b }";
-        let check = TransformSession::check().transform("a.ts", code);
-        assert_eq!(check.code, code);
-        assert!(!check.code.contains("__TYPEGPU_META__"), "{}", check.code);
-        let build = TransformSession::build().transform("a.ts", code);
-        assert!(build.code.contains("__tsover_add"), "{}", build.code);
-        assert!(build.code.contains("__TYPEGPU_META__"), "{}", build.code);
-        assert!(build.code.contains("v: 2"), "{}", build.code);
-    }
-
-    #[test]
-    fn plain_ts_is_unchanged() {
-        let code = "export const n = 1\n";
-        let out = TransformSession::new().transform("a.ts", code);
-        assert!(!out.changed);
-        assert_eq!(out.code, code);
-    }
-
-    #[test]
-    fn sweetener_file_takes_the_macro_path() {
-        let out = TransformSession::new().transform("a.sts", "export const n = 1\n");
-        assert_eq!(out.extension, ".ts");
-    }
-
-    #[test]
-    fn check_keeps_the_author_operator_in_place() {
-        let code = "function step(n: number) {\n  \"use gpu\";\n  return n + 1;\n}\n";
-        let out = TransformSession::check().transform("a.ts", code);
-        assert_eq!(out.code, code);
-        let plus = code.find('+').expect("plus") as i32;
-        let covering = tuples(&out.mappings)
-            .into_iter()
-            .find(|item| item[0] <= plus && plus < item[0] + item[1])
-            .expect("segment");
-        assert_eq!(covering[4], 0, "check does not rewrite the operator");
-        assert_eq!(covering[2] + (plus - covering[0]), plus);
-        let name = out.code.find("function step").expect("name") as i32;
-        let name_seg = tuples(&out.mappings)
-            .into_iter()
-            .find(|item| item[0] <= name && name < item[0] + item[1])
-            .expect("name segment");
-        assert_eq!(name_seg[4], 0);
-        let from = name_seg[2] as usize;
-        let to = from + name_seg[3] as usize;
-        let virtual_from = name_seg[0] as usize;
-        let virtual_to = virtual_from + name_seg[1] as usize;
-        assert_eq!(&code[from..to], &out.code[virtual_from..virtual_to]);
-    }
-
-    #[test]
-    fn macro_atom_composes_onto_the_author_span() {
-        use crate::{Expansion, Segment, SegmentKind};
-        let head = "function step(n: number) {\n  \"use gpu\";\n  ";
-        let author_macro = "unless (n < 0) { return n + 1 }";
-        let virtual_macro = "if (!(n < 0)) { return n + 1 }";
-        let tail = "\n  return kept;\n}\n";
-        let author = format!("{head}{author_macro}{tail}");
-        let virtual_text = format!("{head}{virtual_macro}{tail}");
-        let head_len = head.len() as u32;
-        let virtual_end = head_len + virtual_macro.len() as u32;
-        let author_end = head_len + author_macro.len() as u32;
-        let expansion = Expansion {
-            code: virtual_text.clone(),
-            segments: vec![
-                Segment {
-                    virtual_start: 0,
-                    virtual_end: head_len,
-                    original_start: 0,
-                    original_end: head_len,
-                    kind: SegmentKind::Verbatim,
-                },
-                Segment {
-                    virtual_start: head_len,
-                    virtual_end,
-                    original_start: head_len,
-                    original_end: author_end,
-                    kind: SegmentKind::Atom,
-                },
-                Segment {
-                    virtual_start: virtual_end,
-                    virtual_end: virtual_text.len() as u32,
-                    original_start: author_end,
-                    original_end: author.len() as u32,
-                    kind: SegmentKind::Verbatim,
-                },
-            ],
-            diagnostics: Vec::new(),
-            dependencies: Vec::new(),
-            ..Default::default()
-        };
-        let rewritten = ts_goport::ext::tsover::rewrite_text("a.ts", &virtual_text).unwrap();
-        let segments = compose(&expansion, &rewritten);
-        let call = rewritten.code.find("__tsover_add").unwrap() as i32;
-        let covering = segments
-            .iter()
-            .find(|item| item.0 <= call && call < item.1)
-            .unwrap();
-        assert_eq!(covering.4, 1);
-        assert_eq!(covering.2, head_len as i32);
-        assert_eq!(covering.3, author_end as i32);
-        assert_eq!(
-            &author[covering.2 as usize..covering.3 as usize],
-            author_macro
-        );
-        let kept = rewritten.code.find("return kept").unwrap() as i32;
-        let kept_seg = segments
-            .iter()
-            .find(|item| item.0 <= kept && kept < item.1)
-            .unwrap();
-        assert_eq!(kept_seg.4, 0);
-        assert_eq!(
-            &author[kept_seg.2 as usize..kept_seg.3 as usize],
-            &rewritten.code[kept_seg.0 as usize..kept_seg.1 as usize]
-        );
-    }
-
-    #[test]
-    fn sts_specifiers_rewrite_imports_only() {
-        let code = concat!(
-            "import { a } from \"./logic.sts\";\n",
-            "import type { T } from './types.stsx';\n",
-            "import value = require(\"./value.sts\");\n",
-            "export { b } from \"./panel.stsx\";\n",
-            "export * from \"./all.sts\";\n",
-            "const loaded = import(\"./dyn.sts\");\n",
-            "const phase = import.source(\"./source.stsx\");\n",
-            "type Box = import(\"./box.sts\").Box;\n",
-            "const text = \"keep ./note.sts in a string\";\n",
-            "const tick = `keep ./note.sts in a template`;\n",
-            "const mixed = `head ${import(\"./inner.sts\")} tail ./note.sts`;\n",
-            "// comment ./comment.sts must stay\n",
-            "const query = import(\"./q.sts?x=1\");\n",
-            "const plain = import(\"./already.ts\");\n",
-            "const mid = \"not.sts.a.module\";\n",
-            "const obj = { from: \"./obj.sts\", note: \"./note.sts\" };\n",
-            "function nested() { import { z } from \"./inside.sts\"; return import(\"./also.sts\"); }\n",
-            "const arrow = () => { import { y } from \"./arrow.sts\"; };\n",
-        );
-        let mut out = TransformSession::check().transform("main.sts", code);
-        let has = |needle: &str| {
-            assert!(
-                out.code.contains(needle),
-                "{needle} missing in {}",
-                out.code
-            );
-        };
-        has("from \"./logic\"");
-        has("from './types'");
-        has("require(\"./value\")");
-        has("from \"./panel\"");
-        has("from \"./all\"");
-        has("import(\"./dyn\")");
-        has("import.source(\"./source\")");
-        has("import(\"./box\").Box");
-        has("import(\"./inner\")");
-        has("import(\"./q?x=1\")");
-        has("import(\"./already.ts\")");
-        has("\"keep ./note.sts in a string\"");
-        has("`keep ./note.sts in a template`");
-        has("tail ./note.sts");
-        has("// comment ./comment.sts must stay");
-        has("\"not.sts.a.module\"");
-        has("from \"./inside\"");
-        has("import(\"./also\")");
-        has("from \"./arrow\"");
-        let obj = out.code.find("const obj").expect("obj");
-        let line = &out.code[obj..out.code[obj..]
-            .find('\n')
-            .map_or(out.code.len(), |n| obj + n)];
-        assert_eq!(
-            line, "const obj = { from: \"./obj.sts\", note: \"./note.sts\" };",
-            "{line:?}"
-        );
-        has("./note.sts");
-        has("not.sts.a.module");
-        // Verbatim pieces still copy the author's bytes. The shortened
-        // specifier is an atom over the original literal.
-        for [vs, vl, os, ol, kind] in tuples(&out.mappings) {
-            let (vs, vl, os, ol) = (vs as usize, vl as usize, os as usize, ol as usize);
-            if kind == 0 {
-                assert_eq!(&out.code[vs..vs + vl], &code[os..os + ol]);
-            }
-        }
-        let logic = out.code.find("./logic\"").unwrap();
-        let covering = tuples(&out.mappings)
-            .into_iter()
-            .find(|item| item[0] as usize <= logic && logic < item[0] as usize + item[1] as usize)
-            .expect("logic specifier segment");
-        assert_eq!(covering[4], 1, "rewritten specifier is an atom");
-        let original = &code[covering[2] as usize..covering[2] as usize + covering[3] as usize];
-        assert!(original.contains("./logic.sts"), "{original}");
-        // Text after the shorter specifier still maps to itself.
-        let comment = out.code.find("comment ./comment.sts").unwrap();
-        let comment_seg = tuples(&out.mappings)
-            .into_iter()
-            .find(|item| {
-                item[0] as usize <= comment && comment < item[0] as usize + item[1] as usize
-            })
-            .expect("comment segment");
-        assert_eq!(comment_seg[4], 0);
-        assert_eq!(
-            &out.code[comment_seg[0] as usize..comment_seg[0] as usize + comment_seg[1] as usize],
-            &code[comment_seg[2] as usize..comment_seg[2] as usize + comment_seg[3] as usize]
-        );
-
-        // The same rewrite on a file that is not Sweetener source.
-        out = TransformSession::check().transform("main.ts", code);
-        assert!(out.code.contains("from \"./logic\""), "{}", out.code);
-        assert!(
-            out.code.contains("\"keep ./note.sts in a string\""),
-            "{}",
-            out.code
-        );
-    }
-
-    fn tuples(mappings: &str) -> Vec<[i32; 5]> {
-        let mut out = Vec::new();
-        let mut number = String::new();
-        let mut values = Vec::new();
-        for ch in mappings.chars() {
-            if ch.is_ascii_digit() || ch == '-' {
-                number.push(ch);
-                continue;
-            }
-            if !number.is_empty() {
-                values.push(number.parse::<i32>().unwrap_or(0));
-                number.clear();
-            }
-            if ch == ']' && values.len() == 5 {
-                out.push([values[0], values[1], values[2], values[3], values[4]]);
-                values.clear();
-            }
-        }
-        out
-    }
 }

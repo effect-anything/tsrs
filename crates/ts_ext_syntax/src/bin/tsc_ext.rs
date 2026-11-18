@@ -2,18 +2,18 @@
 //!
 //! With no arguments (or the hidden `mapper` command) this process speaks
 //! the content-mapper protocol on stdin/stdout; a tsconfig `contentMappers`
-//! entry for `@effect-x/tsc` starts it. tsc (the cargo `tsgo` binary) does not link this binary.
+//! entry for `@effect-x/tsc` starts it. tsc (the cargo `tsrs` binary) does not link this binary.
 //! Run by hand in a terminal with no arguments, it prints the help instead.
 //!
 //! Every other command (`expand`, `eval`, `explain`, `cheatsheet`, `help`)
 //! is [`ts_ext_syntax::cli::run`].
 
-use std::collections::HashMap;
 use std::env;
 use std::fmt::Write as _;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
+use rustc_hash::FxHashMap;
 use serde_json::Value;
 use ts_ext_syntax::cli;
 use ts_ext_syntax::config::{self, Options};
@@ -33,13 +33,13 @@ fn main() -> ExitCode {
 }
 
 /// Per-project options from `openProject`, by project handle.
-type Projects = HashMap<String, Options>;
+type Projects = FxHashMap<String, Options>;
 
 fn serve() -> ExitCode {
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut stdout = io::stdout().lock();
-    let mut projects = Projects::new();
+    let mut projects = Projects::default();
     loop {
         let message = match read_message(&mut input) {
             Ok(Some(message)) => message,
@@ -256,9 +256,7 @@ fn read_message(input: &mut impl Read) -> io::Result<Option<String>> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no Content-Length"))?;
     let mut body = vec![0u8; length];
     input.read_exact(&mut body)?;
-    String::from_utf8(body)
-        .map(Some)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+    String::from_utf8(body).map(Some).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 fn write_message(output: &mut impl Write, body: &str) -> io::Result<()> {

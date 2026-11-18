@@ -22,14 +22,8 @@ pub fn topics() -> Vec<(String, String)> {
         .filter_map(|line| line.strip_prefix("## "))
         .map(|heading| (slug(heading), heading.to_owned()))
         .collect();
-    out.push((
-        "options".to_owned(),
-        "tsconfig options reference".to_owned(),
-    ));
-    out.push((
-        "diagnostics".to_owned(),
-        "every SWR code (see also `tsc-ext explain`)".to_owned(),
-    ));
+    out.push(("options".to_owned(), "tsconfig options reference".to_owned()));
+    out.push(("diagnostics".to_owned(), "every SWR code (see also `tsc-ext explain`)".to_owned()));
     out
 }
 
@@ -109,10 +103,7 @@ pub fn explain(code: &str) -> Result<String, String> {
     Err(if near.is_empty() {
         format!("unknown diagnostic code {code}; `tsc-ext explain --list` lists them")
     } else {
-        format!(
-            "unknown diagnostic code {code}. Codes in that range:\n{}",
-            near.join("\n")
-        )
+        format!("unknown diagnostic code {code}. Codes in that range:\n{}", near.join("\n"))
     })
 }
 
@@ -120,13 +111,7 @@ pub fn explain(code: &str) -> Result<String, String> {
 #[must_use]
 pub fn list() -> String {
     CATALOG.iter().fold(String::new(), |mut out, entry| {
-        let _ = writeln!(
-            out,
-            "{}  {:<7}  {}",
-            entry.code,
-            entry.level.as_str(),
-            entry.title
-        );
+        let _ = writeln!(out, "{}  {:<7}  {}", entry.code, entry.level.as_str(), entry.title);
         out
     })
 }
@@ -161,10 +146,7 @@ pub fn render(markdown: &str, style: Style) -> String {
             }
             continue;
         }
-        if let Some(heading) = line
-            .strip_prefix("## ")
-            .or_else(|| line.strip_prefix("### "))
-        {
+        if let Some(heading) = line.strip_prefix("## ").or_else(|| line.strip_prefix("### ")) {
             let text = inline(heading, style);
             let _ = writeln!(out, "{}", style.blue(&text));
             if !style.on {
@@ -181,12 +163,7 @@ pub fn render(markdown: &str, style: Style) -> String {
             if line.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
                 continue;
             }
-            table.push(
-                table_cells(line)
-                    .iter()
-                    .map(|cell| inline(cell, style))
-                    .collect(),
-            );
+            table.push(table_cells(line).iter().map(|cell| inline(cell, style)).collect());
             continue;
         }
         out.push_str(&inline(line, style));
@@ -290,40 +267,4 @@ fn inline(text: &str, style: Style) -> String {
         }
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_topic_renders() {
-        for (name, _) in topics() {
-            assert!(
-                topic(Some(&name)).is_some_and(|text| !text.is_empty()),
-                "{name}"
-            );
-        }
-        assert!(topic(Some("nope")).is_none());
-    }
-
-    #[test]
-    fn plain_rendering_keeps_code_readable() {
-        let out = render(
-            "# T\n\nUse `x` and **y** [z](#z).\n```ts\nconst a = 1;\n```\n",
-            Style { on: false },
-        );
-        assert_eq!(out, "T\n=\n\nUse `x` and y z.\n    const a = 1;\n");
-    }
-
-    #[test]
-    fn explain_finds_codes_and_suggests() {
-        assert!(
-            explain("SWR4001")
-                .unwrap()
-                .contains("No rule of the macro accepted")
-        );
-        assert!(explain("4001").is_ok());
-        assert!(explain("SWR4999").unwrap_err().contains("SWR4001"));
-    }
 }

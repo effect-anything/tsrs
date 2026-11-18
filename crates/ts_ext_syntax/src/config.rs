@@ -26,11 +26,11 @@
 //! it. Unknown keys and wrong types are errors ([`OptionError`]), not
 //! silently ignored.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
+use rustc_hash::FxHashMap;
 use serde_json::Value;
 
 /// The npm package of the `contentMappers` entry tsc-ext reads.
@@ -108,10 +108,7 @@ impl Options {
     pub fn merged(&self, over: &Options) -> Options {
         Options {
             sweetener: SweetenerOptions {
-                rewrite_imports: over
-                    .sweetener
-                    .rewrite_imports
-                    .or(self.sweetener.rewrite_imports),
+                rewrite_imports: over.sweetener.rewrite_imports.or(self.sweetener.rewrite_imports),
             },
             typegpu: TypegpuOptions {
                 auto_naming: over.typegpu.auto_naming.or(self.typegpu.auto_naming),
@@ -220,23 +217,24 @@ pub fn find_tsconfig(file: &Path) -> Option<PathBuf> {
 
 type Cached = (Option<SystemTime>, Result<Options, String>);
 
-fn cache() -> &'static Mutex<HashMap<PathBuf, Cached>> {
-    static CACHE: std::sync::OnceLock<Mutex<HashMap<PathBuf, Cached>>> = std::sync::OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn cache() -> &'static Mutex<FxHashMap<PathBuf, Cached>> {
+    static CACHE: std::sync::OnceLock<Mutex<FxHashMap<PathBuf, Cached>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(FxHashMap::default()))
 }
 
-/// The tsc-ext options of `tsconfig`: the `options` of its [`PACKAGE`]
-/// `contentMappers` entry, or of the first config it `extends` (relative
-/// paths only) that has `contentMappers`. A config with no such entry gives
-/// the defaults. Read errors, JSON errors and invalid options are `Err`.
-/// Results are cached by path and modification time.
+/// Read the tsc-ext options of `tsconfig`.
+///
+/// Uses the `options` of its [`PACKAGE`] `contentMappers` entry, or of the
+/// first config it `extends` (relative paths only) that has `contentMappers`.
+/// A config with no such entry gives the defaults. Read errors, JSON errors
+/// and invalid options are `Err`. Results are cached by path and modification
+/// time.
 ///
 /// # Errors
 /// The message names the config and what is wrong.
 pub fn read_tsconfig_options(tsconfig: &Path) -> Result<Options, String> {
-    let modified = std::fs::metadata(tsconfig)
-        .and_then(|meta| meta.modified())
-        .ok();
+    let modified = std::fs::metadata(tsconfig).and_then(|meta| meta.modified()).ok();
     if let Ok(cache) = cache().lock()
         && let Some((at, result)) = cache.get(tsconfig)
         && *at == modified
@@ -273,11 +271,7 @@ fn own_extensions_at(tsconfig: &Path, depth: usize) -> Vec<String> {
             .flatten()
             .filter(|entry| entry.get("package").and_then(Value::as_str) == Some(PACKAGE))
             .flat_map(|entry| {
-                entry
-                    .get("extensions")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
+                entry.get("extensions").and_then(Value::as_array).cloned().unwrap_or_default()
             })
             .filter_map(|ext| ext.as_str().map(str::to_owned))
             .collect();
@@ -321,10 +315,7 @@ fn read_uncached(tsconfig: &Path, depth: usize) -> Result<Options, String> {
         };
         let (options, errors) = Options::from_json(entry.get("options").unwrap_or(&Value::Null));
         if let Some(first) = errors.first() {
-            return Err(format!(
-                "{}: contentMappers \"{PACKAGE}\" {first}",
-                tsconfig.display()
-            ));
+            return Err(format!("{}: contentMappers \"{PACKAGE}\" {first}", tsconfig.display()));
         }
         return Ok(options);
     }
@@ -410,67 +401,4 @@ pub fn strip_jsonc(text: &str) -> String {
     }
     out.push_str(&text[start.min(text.len())..]);
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Options, strip_jsonc};
-    use serde_json::json;
-
-    #[test]
-    fn reads_categories_and_reports_unknown_keys() {
-        let (options, errors) = Options::from_json(&json!({
-            "sweetener": { "rewriteImports": true },
-            "typegpu": { "autoNaming": false, "forceTgpuAlias": "gpu", "exclude": "x" },
-            "other": 1
-        }));
-        assert_eq!(options.typegpu.auto_naming, Some(false));
-        assert_eq!(options.sweetener.rewrite_imports, Some(true));
-        assert_eq!(options.typegpu.force_tgpu_alias.as_deref(), Some("gpu"));
-        let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
-        assert_eq!(
-            messages,
-            [
-                "options.other: unknown option category",
-                "options.typegpu.exclude: unknown option"
-            ]
-        );
-    }
-
-    #[test]
-    fn explicit_fields_override_single_fields() {
-        let (base, _) =
-            Options::from_json(&json!({"typegpu": {"autoNaming": false, "earlyPruning": true}}));
-        let (over, _) = Options::from_json(&json!({"typegpu": {"autoNaming": true}}));
-        let merged = base.merged(&over);
-        assert_eq!(merged.typegpu.auto_naming, Some(true));
-        assert_eq!(merged.typegpu.early_pruning, Some(true));
-    }
-
-    #[test]
-    fn jsonc_comments_and_trailing_commas() {
-        let text = "{\n // c\n \"a\": \"//x,}\", /* b */ \"b\": [1,],\n}";
-        let value: serde_json::Value = serde_json::from_str(&strip_jsonc(text)).unwrap();
-        assert_eq!(value, json!({"a": "//x,}", "b": [1]}));
-    }
-
-    #[test]
-    fn tsconfig_entry_and_extends() {
-        let dir = std::env::temp_dir().join(format!("tsc-ext-config-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("base.json"),
-            r#"{ "contentMappers": [{ "package": "@effect-x/tsc", "extensions": [".sts"],
-                 "options": { "typegpu": { "earlyPruning": true } } }] }"#,
-        )
-        .unwrap();
-        std::fs::write(dir.join("tsconfig.json"), r#"{ "extends": "./base", }"#).unwrap();
-        let options = super::read_tsconfig_options(&dir.join("tsconfig.json")).unwrap();
-        assert_eq!(options.typegpu.early_pruning, Some(true));
-        assert_eq!(
-            super::find_tsconfig(&dir.join("src/a.sts")),
-            Some(dir.join("tsconfig.json"))
-        );
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
 }

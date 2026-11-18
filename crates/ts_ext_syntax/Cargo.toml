@@ -26,7 +26,6 @@ tsrs_diagnostics.workspace = true
 tsrs_spanmap.workspace = true
 tsrs_vfs.workspace = true
 tsrs_tsoptions.workspace = true
-tsrs_contentmapper.workspace = true
 napi = { workspace = true, optional = true }
 napi-derive = { workspace = true, optional = true }
 serde_json.workspace = true
@@ -34,6 +33,8 @@ rustc-hash.workspace = true
 
 [dev-dependencies]
 rustc-hash.workspace = true
+tsrs_contentmapper.workspace = true
+tsrs_compiler.workspace = true
 tsrs_project.workspace = true
 tsrs_lsp.workspace = true
 tsrs_lsproto.workspace = true

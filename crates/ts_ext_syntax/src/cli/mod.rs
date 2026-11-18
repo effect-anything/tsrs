@@ -44,11 +44,8 @@ const EVAL_FLAGS: &[Flag] = &[
     flag("as", Takes::Value),
 ];
 
-const DOC_FLAGS: &[Flag] = &[
-    flag("raw", Takes::Nothing),
-    flag("list", Takes::Nothing),
-    flag("color", Takes::Value),
-];
+const DOC_FLAGS: &[Flag] =
+    &[flag("raw", Takes::Nothing), flag("list", Takes::Nothing), flag("color", Takes::Value)];
 
 pub const HELP: &str = "\
 tsc-ext — the @effect-x/tsc content mapper, and tools to debug what it does
@@ -306,10 +303,7 @@ fn explain(parsed: &args::Parsed) -> u8 {
         return EXIT_OK;
     }
     let [code] = parsed.positionals.as_slice() else {
-        return usage_error(
-            "explain",
-            "name one code: tsc-ext explain SWR4001 (or --list)",
-        );
+        return usage_error("explain", "name one code: tsc-ext explain SWR4001 (or --list)");
     };
     match docs::explain(code) {
         Ok(markdown) => print_doc(parsed, &markdown),
@@ -333,11 +327,7 @@ fn cheatsheet(parsed: &args::Parsed) -> u8 {
         let names: Vec<String> = docs::topics().into_iter().map(|(name, _)| name).collect();
         usage_error(
             "cheatsheet",
-            &format!(
-                "no topic {}; topics are {}",
-                parsed.positionals[0],
-                names.join(", ")
-            ),
+            &format!("no topic {}; topics are {}", parsed.positionals[0], names.join(", ")),
         )
     }
 }
