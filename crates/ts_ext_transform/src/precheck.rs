@@ -111,6 +111,37 @@ pub fn rewrite_emitted_with_generator(
     Some((next.code, next_generator))
 }
 
+/// Rewrites `writer` and `source_map_generator` in place inside `Emitter::print_source_file`.
+pub fn rewrite_emitted_source_map(
+    source_file: P<SourceFile>,
+    js_file_path: &str,
+    writer: &mut (dyn tsrs_printer::EmitTextWriter + 'static),
+    source_map_generator: &mut Generator,
+) {
+    if source_file.is_declaration_file() || is_declaration_output(js_file_path) {
+        return;
+    }
+    let printed_js = writer.string();
+    if let Some((rewritten_js, next_generator)) =
+        rewrite_emitted_with_generator(js_file_path, &printed_js, Some(source_map_generator))
+    {
+        writer.clear();
+        writer.raw_write(&rewritten_js);
+        if let Some(next_generator) = next_generator {
+            *source_map_generator = next_generator;
+        }
+    }
+}
+
+/// Rewrites emitted `text` in place inside `Emitter::print_source_file` when no source map is active.
+pub fn rewrite_emitted_no_map(source_file: P<SourceFile>, js_file_path: &str, text: &mut String) {
+    if !source_file.is_declaration_file()
+        && let Some((rewritten_js, _)) = rewrite_emitted_with_generator(js_file_path, text, None)
+    {
+        *text = rewritten_js;
+    }
+}
+
 /// Rewrites one emitted JavaScript file (`js`) and its optional source map
 /// (`map`), given the file `path` and `original` source text.
 ///

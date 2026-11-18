@@ -26,7 +26,9 @@ pub fn run_lsp(args: &[String]) -> i32 {
     let _pipe = flag.string_value("pipe");
     let _socket = flag.string_value("socket");
     let client_process_id = flag.int_value("clientProcessId");
-    let run_external_code = flag.bool_value("runExternalCode");
+    if flag.bool_value("runExternalCode") {
+        tsrs_lsp::set_default_run_external_code(true);
+    }
 
     if !stdio {
         eprintln!("only stdio is supported");
@@ -76,7 +78,6 @@ pub fn run_lsp(args: &[String]) -> i32 {
         spawn: Some(Arc::new(tsrs_contentmapper::spawn_process)),
         progress_delay: Duration::from_millis(250),
         set_parent_process_id: new_parent_process_watchdog(&ctx, &stop, client_process_id),
-        run_external_code,
     });
 
     let result = s.run(&ctx);

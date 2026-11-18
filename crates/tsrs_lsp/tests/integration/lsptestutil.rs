@@ -347,7 +347,6 @@ pub fn test_server_options(cwd: &str, files: &[(&str, &str)]) -> ServerOptions {
         spawn: None,
         progress_delay: Duration::ZERO,
         set_parent_process_id: None,
-        run_external_code: false,
     }
 }
 

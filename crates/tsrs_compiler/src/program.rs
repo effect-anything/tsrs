@@ -2421,7 +2421,7 @@ impl Program {
                 .iter()
                 .copied()
                 .filter(|source_file| {
-                    !source_file.content_mapper().is_empty()
+                    !tsrs_spanmap::emits_javascript(source_file.content_mapper())
                         && !self.is_source_file_from_external_library(*source_file)
                         && self.get_project_reference_from_source(source_file.path()).is_none()
                 })
