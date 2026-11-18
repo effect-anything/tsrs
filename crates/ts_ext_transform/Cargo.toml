@@ -1,0 +1,28 @@
+[package]
+name = "ts_ext_transform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Source-to-source transforms (align, tsover, typegpu) and precheck/post-emit rewrites for tsrs."
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+tsrs_core.workspace = true
+tsrs_diagnostics.workspace = true
+tsrs_spanmap.workspace = true
+tsrs_ast.workspace = true
+tsrs_scanner.workspace = true
+tsrs_parser.workspace = true
+tsrs_binder.workspace = true
+tsrs_printer.workspace = true
+tsrs_sourcemap.workspace = true
+base64.workspace = true
+rustc-hash.workspace = true
+
+[lints]
+workspace = true

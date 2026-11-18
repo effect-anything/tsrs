@@ -1,0 +1,56 @@
+[package]
+name = "ts_ext_syntax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Content mapper: Sweetener, then the TypeGPU session."
+
+[[bin]]
+name = "tsc-ext"
+path = "src/bin/tsc_ext.rs"
+test = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+ts_ext_sweetener.workspace = true
+ts_ext_typegpu.workspace = true
+ts_ext_transform.workspace = true
+tsrs_core.workspace = true
+tsrs_diagnostics.workspace = true
+tsrs_spanmap.workspace = true
+tsrs_vfs.workspace = true
+tsrs_tsoptions.workspace = true
+tsrs_contentmapper.workspace = true
+napi = { workspace = true, optional = true }
+napi-derive = { workspace = true, optional = true }
+serde_json.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+rustc-hash.workspace = true
+tsrs_project.workspace = true
+tsrs_lsp.workspace = true
+tsrs_lsproto.workspace = true
+tsrs_ls.workspace = true
+tsrs_api.workspace = true
+tsrs_execute.workspace = true
+tsrs_fswatch.workspace = true
+
+[build-dependencies]
+napi-build = { workspace = true, optional = true }
+
+[features]
+default = ["node"]
+# The Node-API binding (`src/node.rs`, the npm package's native module). A
+# library host that links this crate into its own binary turns it off: the
+# binding leaves `napi_*` symbols for a Node process to provide.
+node = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
+
+[lints]
+workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "ts_ext_sweetener"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Sweetener expansion, cases, and tools. ts_ext_syntax only composes this with TypeGPU."
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+tsrs_core.workspace = true
+tsrs_ast.workspace = true
+tsrs_parser.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[[example]]
+name = "capture_ours"
+path = "scripts/capture_ours.rs"
+
+[lints]
+workspace = true

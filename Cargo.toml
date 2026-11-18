@@ -111,6 +111,13 @@ tsrs_execute = { version = "7.1.0-beta.tsrs2", path = "crates/tsrs_execute" }
 tsrs_cli = { version = "7.1.0-beta.tsrs2", path = "crates/tsrs_cli" }
 tsrs_lint = { version = "7.1.0-beta.tsrs2", path = "crates/tsrs_lint" }
 tsrs_fswatch = { version = "7.1.0-beta.tsrs2", path = "crates/tsrs_fswatch" }
+ts_ext_transform = { path = "crates/ts_ext_transform" }
+ts_ext_sweetener = { path = "crates/ts_ext_sweetener" }
+ts_ext_typegpu = { path = "crates/ts_ext_typegpu" }
+ts_ext_syntax = { path = "crates/ts_ext_syntax" }
+napi = { version = "3", default-features = false, features = ["napi4"] }
+napi-derive = "3"
+napi-build = "2"
 
 [profile.dev]
 debug = false

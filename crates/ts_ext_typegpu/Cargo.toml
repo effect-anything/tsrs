@@ -1,0 +1,31 @@
+[package]
+name = "ts_ext_typegpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "TypeGPU plugin session over ts_ext_transform. Not linked into tsrs CLI."
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+tsrs_core.workspace = true
+tsrs_spanmap.workspace = true
+tsrs_ast.workspace = true
+tsrs_parser.workspace = true
+ts_ext_transform.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+tsrs_vfs.workspace = true
+tsrs_project.workspace = true
+
+[[example]]
+name = "capture_ours"
+path = "scripts/capture_ours.rs"
+
+[lints]
+workspace = true
